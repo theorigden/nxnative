@@ -12,10 +12,26 @@
 //   (8) the game's own folder (<folder>/<title ID>) chosen as the folder
 //   (9) a new backup removes the oldest of its side beyond 10, and leaves the other side's and the player's own folders
 //   (10) the launcher's DM_SAVE with a trailing slash: the same <save>.sync as the host's
+//   (11) the player's notices: the device a model names and a save's time in words; in (3) and (4) the notice of each start and each send (kind and wording)
 #include "../hle_fs.c"
 #include <ctype.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <sys/time.h>
+
+// The player's notices (save_sync.h): the forked sessions write one a line to $T_NOTES ("<kind> <text>"), which noted() reads and empties
+void front_save_sync_note(ss_note kind, const char *text, double seconds) {
+    (void)seconds; const char *p = getenv("T_NOTES"); FILE *f = p ? fopen(p, "a") : NULL;
+    if (f) { fprintf(f, "%d %s\n", (int)kind, text); fclose(f); }
+}
+static char g_notes[1400];
+static void notes_clear(void) { FILE *f = fopen(g_notes, "w"); if (f) fclose(f); }
+static int noted(ss_note kind, const char *part) {   // a notice of that kind containing `part` came since notes_clear()
+    char line[400]; int hit = 0; FILE *f = fopen(g_notes, "r");
+    while (f && fgets(line, sizeof line, f)) if (atoi(line) == (int)kind && strstr(line, part)) hit = 1;
+    if (f) fclose(f);
+    return hit;
+}
 
 struct dm_flags g_flag; uint64_t g_t0_ns;
 uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC); }
@@ -141,21 +157,35 @@ int main(void) {
     for (size_t i = 0; i <= strlen(DM_GAME_ID); i++) id[i] = (char)toupper((unsigned char)DM_GAME_ID[i]);
     snprintf(cf, sizeof cf, "%s/%s/save.dmsync", cloud, id);
 
+    snprintf(g_notes, sizeof g_notes, "%s/notes.txt", root); setenv("T_NOTES", g_notes, 1);
+    char here[24], model[64] = ""; size_t ml = sizeof model; sysctlbyname("hw.model", model, &ml, NULL, 0); ss_device_kind(model, here, sizeof here);   // the children's device
+
     printf("(3) Mac -> cloud -> iPhone\n");
     snprintf(p, sizeof p, "%s/game.dat", A); put(p, "v1");
+    notes_clear();
     CHECK(session(A, cloud, NULL, NULL) == 0 && cloud_has(cf, root, "game.dat", "v1"), "the Mac's first session with sync sends its save");
     snprintf(p, sizeof p, "%s.sync", A); CHECK(exists(p), "and remembers it as in step (%s)", p);
     snprintf(p, sizeof p, "%s.sync-tmp", A); CHECK(!exists(p), "nothing is left beside the save");
+    snprintf(u, sizeof u, "iCloud: the save on this %s is the newest; sending it", here);
+    CHECK(noted(SS_NOTE_OUT, u) && noted(SS_NOTE_OK, "Saved to iCloud"), "its notices: '%s', then 'Saved to iCloud'", u);
     snprintf(p, sizeof p, "%s/game.dat", B);
+    notes_clear();
     CHECK(session(B, cloud, NULL, NULL) == 0 && same(p, "v1"), "the iPhone's first session brings it in");
+    snprintf(u, sizeof u, "iCloud: loaded the save from your %s, saved ", here);
+    CHECK(noted(SS_NOTE_IN, u) && !noted(SS_NOTE_OK, "Saved to iCloud"), "its notice: '%s…', and nothing sent", u);
     snprintf(q, sizeof q, "%s-backups", B); CHECK(!exists(q), "with no save of its own, the iPhone keeps no backup");
+    notes_clear();
     CHECK(session(B, cloud, "game.dat", "v2") == 0 && cloud_has(cf, root, "game.dat", "v2"), "the iPhone saves: the cloud has its save");
+    CHECK(noted(SS_NOTE_OK, "iCloud: save up to date, saved ") && noted(SS_NOTE_OK, "Saved to iCloud"), "its notices: 'iCloud: save up to date, saved …' at the start, 'Saved to iCloud' after the save");
 
     printf("(4) the cloud's changed\n");
     snprintf(p, sizeof p, "%s/game.dat", A);
+    notes_clear();
     CHECK(session(A, cloud, NULL, NULL) == 0 && same(p, "v2"), "the Mac starts again: the iPhone's save comes in");
     backup_of(A, "local", back, sizeof back); snprintf(q, sizeof q, "%s/save/game.dat", back);
     CHECK(*back && same(q, "v1"), "the Mac's old save is kept (%s)", back);
+    CHECK(noted(SS_NOTE_IN, "iCloud: loaded the save from"), "its notice says the save was loaded");
+    unsetenv("T_NOTES");
 
     printf("(5) both changed, the cloud's newer\n");
     snprintf(p, sizeof p, "%s/game.dat", B);
@@ -216,6 +246,22 @@ int main(void) {
     CHECK(save_sync_after_exit(u, DM_GAME_ID) == 1 && cloud_has(cf, root, "game.dat", "v10"), "it goes out");
     snprintf(p, sizeof p, "%s/.sync", C); CHECK(!exists(p), "and the sync state is beside the save, not inside it");
     unsetenv("DM_SAVE_SYNC");
+
+    printf("(11) the notice's words\n");
+    char w[64];
+    ss_device_kind("MacBookPro18,2", w, sizeof w); CHECK(!strcmp(w, "Mac"), "MacBookPro18,2 is a Mac (%s)", w);
+    ss_device_kind("Mac16,1", w, sizeof w); CHECK(!strcmp(w, "Mac"), "Mac16,1 is a Mac (%s)", w);
+    ss_device_kind("iPhone16,2", w, sizeof w); CHECK(!strcmp(w, "iPhone"), "iPhone16,2 is an iPhone (%s)", w);
+    ss_device_kind("iPad13,8", w, sizeof w); CHECK(!strcmp(w, "iPad"), "iPad13,8 is an iPad (%s)", w);
+    ss_device_kind("unknown", w, sizeof w); CHECK(!strcmp(w, "another device"), "an unknown model is another device (%s)", w);
+    struct tm tm = {.tm_year = 2026 - 1900, .tm_mon = 10, .tm_mday = 7, .tm_hour = 13, .tm_min = 30, .tm_isdst = -1};
+    int64_t now = (int64_t)mktime(&tm);
+    ss_when_friendly(now - 3600, now, w, sizeof w); CHECK(!strcmp(w, "today at 12:30"), "an hour ago: %s", w);
+    ss_when_friendly(now - 86400, now, w, sizeof w); CHECK(!strcmp(w, "yesterday at 13:30"), "a day ago: %s", w);
+    ss_when_friendly(now - 4 * 86400, now, w, sizeof w); CHECK(!strcmp(w, "on 3 Nov at 13:30"), "four days ago: %s", w);
+    tm.tm_mon = 2; tm.tm_mday = 1; now = (int64_t)mktime(&tm);   // 1 March: yesterday is the last day of February
+    ss_when_friendly(now - 86400, now, w, sizeof w); CHECK(!strcmp(w, "yesterday at 13:30"), "the day before the 1st of a month: %s", w);
+    ss_when_friendly(0, now, w, sizeof w); CHECK(!strcmp(w, "at an unknown time"), "no time: %s", w);
 
     printf("== save sync: %d checks, %d failed ==\n", checks, fails);
     if (!fails) { char c[1200]; snprintf(c, sizeof c, "rm -rf '%s'", root); system(c); }

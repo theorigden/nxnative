@@ -239,6 +239,8 @@ When the game starts, it brings the save from iCloud Drive in if that one is the
 
 A save that is replaced, on the device or in iCloud Drive, is kept first, beside the save in a folder named after it with `-backups` (on the iPhone `save-backups` in the Files app, under the app's name; on the Mac `~/Library/Application Support/nxnative/<title ID>/save-backups`): `<date> local` holds this device's save, `<date> cloud` the one that was in iCloud Drive. The newest 10 of each kind stay, and older ones are removed; other folders you put there are left alone.
 
+A notice at the top right of the game says what happened, for a few seconds: when the game first loads its save, **iCloud: save up to date**, **loaded the save from your iPhone** (or Mac, or iPad) with when it was saved, **the save on this Mac is the newest; sending it**, or that iCloud is not reachable; after each save that reaches iCloud, **Saved to iCloud**. A save that cannot be sent says so once, and again only after one has gone through. With cloud saves off there is no notice.
+
 iCloud Drive takes a moment to carry a file from one device to the other. Quit the game on one device and give it a few seconds before you start it on the other. Without a connection the game plays on with the save it has and sends it later. The game log says what came in and what went out (lines starting with `save sync:`).
 
 ## In-game menu

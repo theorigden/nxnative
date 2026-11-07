@@ -26,6 +26,7 @@
 #include "pad_hid_mac.h"
 #include "home_quit.h"
 #include "home_quit_mac.h"
+#include "save_sync.h"
 #include <signal.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -1561,6 +1562,44 @@ void front_run(void (*guest)(void)) {
     }
 }
 
+// Cloud saves' notice (save_sync.h front_save_sync_note): a rounded dark box at the game's top right for a few seconds, an iCloud symbol and the text; a new notice
+// replaces the one showing. Over the game and the progress screen, and it takes no clicks: the box is not hit-tested (DmNoteView)
+@interface DmNoteView : NSView @end
+@implementation DmNoteView
+- (NSView *)hitTest:(NSPoint)p { (void)p; return nil; }
+@end
+static NSView *g_note; static uint64_t g_note_gen;
+void front_save_sync_note(ss_note kind, const char *text, double seconds) {
+    if (!g_layer || !text) return;   // no window: a windowless run
+    NSString *t = @(text);
+    NSString *sym = kind == SS_NOTE_IN ? @"icloud.and.arrow.down" : kind == SS_NOTE_OUT ? @"icloud.and.arrow.up" : kind == SS_NOTE_WARN ? @"exclamationmark.icloud" : @"checkmark.icloud";
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSView *cv = g_win.contentView; if (!cv) return;
+        [g_note removeFromSuperview];
+        uint64_t gen = ++g_note_gen;
+        NSTextField *label = [NSTextField wrappingLabelWithString:t];
+        label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium]; label.textColor = NSColor.whiteColor; label.maximumNumberOfLines = 2;
+        NSSize ls = [label.cell cellSizeForBounds:NSMakeRect(0, 0, 340, 200)]; ls.width = ceil(ls.width); ls.height = ceil(ls.height);
+        NSImageView *icon = [NSImageView imageViewWithImage:[NSImage imageWithSystemSymbolName:sym accessibilityDescription:@"iCloud"] ?: [NSImage new]];
+        icon.symbolConfiguration = [NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightMedium];
+        icon.contentTintColor = kind == SS_NOTE_WARN ? NSColor.systemYellowColor : NSColor.whiteColor;
+        const CGFloat pad = 10, iw = 22, gap = 8, margin = 16;
+        CGFloat w = pad + iw + gap + ls.width + pad, h = fmax(38, ls.height + 2 * pad);
+        NSView *box = [[DmNoteView alloc] initWithFrame:NSMakeRect(NSWidth(cv.bounds) - w - margin, NSHeight(cv.bounds) - h - margin, w, h)];
+        box.wantsLayer = YES; box.layer.backgroundColor = [NSColor colorWithWhite:0.08 alpha:0.85].CGColor; box.layer.cornerRadius = 10;
+        box.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;   // stays at the top right as the window resizes
+        icon.frame = NSMakeRect(pad, floor((h - iw) / 2), iw, iw); label.frame = NSMakeRect(pad + iw + gap, floor((h - ls.height) / 2), ls.width, ls.height);
+        [box addSubview:icon]; [box addSubview:label];
+        box.alphaValue = 0; [cv addSubview:box positioned:NSWindowAbove relativeTo:nil]; g_note = box;
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *c) { c.duration = 0.25; box.animator.alphaValue = 1; }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (gen != g_note_gen) return;   // replaced meanwhile
+            [NSAnimationContext runAnimationGroup:^(NSAnimationContext *c) { c.duration = 0.4; box.animator.alphaValue = 0; }
+                                completionHandler:^{ if (gen == g_note_gen) { [box removeFromSuperview]; g_note = nil; } }];
+        });
+    });
+}
+
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's, the title, a bar and a count, centered; AppKit views, so it draws while the game's thread waits
 static NSView *g_prog; static NSTextField *g_prog_title, *g_prog_count; static NSProgressIndicator *g_prog_bar;
 static NSTextField *prog_label(NSRect r, CGFloat size, NSFontWeight w, NSColor *c) {
@@ -1587,6 +1626,7 @@ void front_progress(const char *title, long done, long total) {
             g_prog_count = prog_label(NSMakeRect(0, 4, 400, 22), 13, NSFontWeightRegular, [NSColor colorWithWhite:0.72 alpha:1]);
             [box addSubview:g_prog_title]; [box addSubview:g_prog_bar]; [box addSubview:g_prog_count]; [g_prog addSubview:box];
             [cv addSubview:g_prog];
+            if (g_note) [cv addSubview:g_note positioned:NSWindowAbove relativeTo:nil];   // the cloud saves' notice stays over it
         }
         g_prog_title.stringValue = tt; g_prog_bar.maxValue = total > 0 ? (double)total : 1; g_prog_bar.doubleValue = (double)done;
         g_prog_count.stringValue = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],

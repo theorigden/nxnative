@@ -8,6 +8,7 @@
 // both changed (played on both without syncing in between, or the first sync of a device that has a save of its own): the newer one wins and the other is kept.
 // Every save this replaces, here or in the cloud, is kept first in <DM_SAVE>-backups/<date> <side>; the newest 10 of each side stay.
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #define SS_HASH 32   // hex digits of a save's hash: the first 16 bytes of a SHA-256
@@ -36,6 +37,16 @@ void save_sync_mount(const char *save, const char *title);   // the game's first
 void save_sync_committed(void);           // a Commit went through (hle_fs.c, under its locks: it only wakes the sender)
 int save_sync_flush(int timeout_ms);      // sends now what was committed and not sent (the iPhone app going to the background): 1 = in step with the cloud, 0 = not (yet)
 int save_sync_after_exit(const char *save, const char *title);   // the Mac launcher once the host has exited (a crash included): 1 = in step, 0 = not
+
+// ---- what the player sees: a short notice at the top right of the game (front_mac.m, front_ios.m; the weak default in save_sync.c shows none) ----
+// Once when the save first comes up (in step with the cloud, brought in, this device's going out, the cloud not reachable) and when a send goes through, or fails after
+// one went through. kind picks the symbol; text is the whole notice (English, as the log); seconds how long it stays. Called on the host's threads, never the main one's
+typedef enum { SS_NOTE_OK, SS_NOTE_IN, SS_NOTE_OUT, SS_NOTE_WARN } ss_note;
+void front_save_sync_note(ss_note kind, const char *text, double seconds);
+// The notice's wording, for the tests: the device a model ID names ("Mac16,1" → "Mac", "iPhone16,2" → "iPhone", "iPad13,8" → "iPad"; else "another device"),
+// and a save's time relative to `now` ("today at 14:02", "yesterday at 22:10", "on 3 Nov at 09:15")
+void ss_device_kind(const char *model, char *out, size_t n);
+void ss_when_friendly(int64_t t, int64_t now, char *out, size_t n);
 
 // ---- what the platform provides (weak defaults in save_sync.c: plain file copies, which the Mac's iCloud Drive takes) ----
 // Copies the cloud's file to a local one; the iPhone app goes through NSFileCoordinator, which downloads a file iCloud has only listed (SaveSync.m).
