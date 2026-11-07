@@ -225,6 +225,8 @@ Turn off **Show this window at launch** to start the game at once with your choi
 
 **Window** or **Fullscreen**: how the game's window opens. ⌃⌘F or the green button changes it while you play. In an `env.txt`: `DM_FULLSCREEN=1` or `0`.
 
+On a MacBook with a notch, fullscreen covers the whole screen, the strip beside the notch included, where macOS's own fullscreen leaves that strip black; the menu bar and the Dock appear when the pointer reaches them. The game's picture is never drawn behind the notch: a 16:9 picture is centred on the whole screen, its black bars covering the strip, and a picture too tall for that sits just below the notch. You can't swipe to this fullscreen as to another Space; use ⌘Tab. `DM_FULLSCREEN_NOTCH=0` in the `env.txt` uses macOS's own fullscreen instead.
+
 ### Cloud saves folder
 
 **Choose a folder…** picks the iCloud Drive folder the game's save is synced through, the one the iPhone app chose in its launcher's **Cloud saves**, or the game's own folder inside it, named after its title ID ([Cloud saves](#cloud-saves)); **Turn off** stops it. Off by default. macOS may ask once whether the app may open iCloud Drive; if the game log says `this app may not open iCloud Drive`, allow it in System Settings › Privacy & Security › Files and Folders. In an `env.txt`: `DM_SAVE_SYNC=<folder>`, or `DM_SAVE_SYNC=icloud` for iCloud Drive › nxnative Saves; the window then shows it fixed.
