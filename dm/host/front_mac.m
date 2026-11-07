@@ -1,6 +1,7 @@
 // Mac front end: with DM_WINDOW=1 open a window (CAMetalLayer, for the graphics backend to present frames) + keyboard and controllers → dm_input; the guest runs on a large-stack thread instead and the main thread belongs to AppKit.
 // Without DM_WINDOW: the guest runs directly on the current thread, behaving the same as with no front end (windowless tests use this).
-// The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN=1 starts it that way. ⌘Q quits, and so does a controller's Home button held for 2 s and
+// The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN=1 starts it that way. On a screen with a camera housing fullscreen covers the whole screen,
+// the row beside the housing included (fs_whole_enter). ⌘Q quits, and so does a controller's Home button held for 2 s and
 // confirmed with A (home_quit.h); the left mouse button is the touchscreen.
 // Cheats (hle_cheats.c): the Cheats menu's rows toggle, reload (⌘R) and open the cheats folder; its first item "Show Cheats
 // Window" (⌘⇧C, or DM_CHEATS_WINDOW=1 at launch) opens a Cheats panel beside the game: sections, search, the master switch,
@@ -64,6 +65,8 @@ int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency:
 // for 60 and 30 fps), for this app only: macOS switches it back when the host quits, crashes included, and leaving fullscreen or that screen switches it back at once. A window keeps the
 // screen's rate, because the switch changes the whole screen for every app and most external screens go black for a second or more. A screen with no such mode keeps the virtual ticks
 static NSWindow *g_win; static _Atomic int g_match_want;   // the game's window; the frame rate to match (0 = not known yet), written by the present thread only
+static int g_fs_whole;   // main thread: the window covers the whole screen of a Mac with a camera housing (fs_whole_enter, below)
+static int win_fullscreen(NSWindow *w) { return g_fs_whole || (w.styleMask & NSWindowStyleMaskFullScreen) != 0; }   // either fullscreen
 static CGDirectDisplayID g_match_id; static CGDisplayModeRef g_match_orig;   // main thread: the screen this host switched and its own mode (NULL = none switched)
 static double mode_hz(CGDisplayModeRef m) { double hz = CGDisplayModeGetRefreshRate(m); return hz > 0 ? hz : 0; }   // 0 = not known (older built-in screens report none)
 static int hz_multiple(double hz, int fps) { double k = round(hz / fps); return k >= 1 && fabs(hz / fps - k) < 0.01; }   // 59.94 Hz counts as 60
@@ -82,7 +85,7 @@ static void screen_match_restore(int on_it) {   // main thread: the screen this 
 }
 static void screen_match_apply(void) {   // main thread: on a new frame rate, on entering and leaving fullscreen and on a move to another screen
     static int off = -1; if (off < 0) { const char *e = getenv("DM_SCREEN_MATCH"); off = e && !strcmp(e, "0"); if (off) LOG("front end: the screen keeps its refresh rate in fullscreen too (DM_SCREEN_MATCH=0)"); }
-    NSScreen *scr = g_win.screen; int want = g_match_want, full = (g_win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    NSScreen *scr = g_win.screen; int want = g_match_want, full = win_fullscreen(g_win);
     CGDirectDisplayID id = scr ? [scr.deviceDescription[@"NSScreenNumber"] unsignedIntValue] : kCGNullDirectDisplay;
     if (g_match_orig && (!full || id != g_match_id)) screen_match_restore(id == g_match_id);
     if (off || !full || want <= 0 || !scr) return;
@@ -113,6 +116,43 @@ static void screen_match_apply(void) {   // main thread: on a new frame rate, on
 void front_screen_match(int fps) {
     if (!g_layer || g_match_want == fps) return;   // no window (a windowless run's main thread runs the guest), or the rate as before
     g_match_want = fps; dispatch_async(dispatch_get_main_queue(), ^{ screen_match_apply(); });
+}
+
+// Fullscreen over the whole screen of a Mac with a camera housing (the notch). macOS's own fullscreen keeps a window below the housing's row: on a 16" M1 Max it stays
+// 1728x1084 of the screen's 1728x1117 points, even when -window:willUseFullScreenContentSize: or -constrainFrameRect:toScreen: ask for the whole screen, and the row
+// beside the housing stays black. On such a screen the window instead goes borderless over the whole screen, the menu bar and the Dock hiding until the pointer
+// reaches them, as in macOS's own fullscreen (DM_FULLSCREEN_NOTCH=0 keeps macOS's own). The green button, ⌃⌘F and DM_FULLSCREEN all reach it through
+// -toggleFullScreen: (DmGameWindow). Nothing of the picture is drawn behind the housing: DmGameView fits it to the whole screen when the black bars around it are at
+// least as tall as the housing's row (a 16:9 game on the 16:10 screen), and below the row otherwise.
+static NSRect g_fs_saved; static NSWindowStyleMask g_fs_saved_style;   // the window's frame and style before, which leaving puts back
+static int fs_whole_wanted(NSScreen *s) {   // fullscreen on this screen covers the whole of it: it has a housing, and DM_FULLSCREEN_NOTCH is not 0
+    static int off = -1; if (off < 0) { const char *e = getenv("DM_FULLSCREEN_NOTCH"); off = e && !strcmp(e, "0"); }
+    return !off && s && s.safeAreaInsets.top > 0;
+}
+static void fs_entered(NSWindow *w) { screen_refresh(w.screen); g_fullscreen = 1; g_layer.contentsScale = w.backingScaleFactor; screen_match_apply(); }
+static void fs_left(NSWindow *w) { g_fullscreen = 0; screen_refresh(w.screen); g_layer.contentsScale = w.backingScaleFactor; screen_match_apply(); }
+static void fs_whole_enter(NSWindow *w) {
+    NSScreen *s = w.screen;
+    g_fs_saved = w.frame; g_fs_saved_style = w.styleMask;
+    w.styleMask = NSWindowStyleMaskBorderless;
+    NSApp.presentationOptions = NSApplicationPresentationAutoHideDock | NSApplicationPresentationAutoHideMenuBar;   // applies while the app is active; another app gets its menu bar back
+    g_layer.contentsGravity = kCAGravityBottom;   // a drawable of the part below the housing's row (DmGameView pictureArea) stays there; the row shows the layer's black background
+    g_fs_whole = 1;
+    [w setFrame:s.frame display:YES];
+    [w makeKeyAndOrderFront:nil];
+    LOG("front end: fullscreen over the whole screen, %.0fx%.0f points, the housing's row %.0f (DM_FULLSCREEN_NOTCH=0 keeps macOS's fullscreen below it)",
+        s.frame.size.width, s.frame.size.height, s.safeAreaInsets.top);
+    fs_entered(w);
+}
+static void fs_whole_leave(NSWindow *w) {
+    NSApp.presentationOptions = NSApplicationPresentationDefault;
+    g_layer.contentsGravity = kCAGravityResize;   // CALayer's default, as a window had it
+    g_fs_whole = 0;
+    w.styleMask = g_fs_saved_style;
+    [w setFrame:g_fs_saved display:YES];
+    [w makeKeyAndOrderFront:nil];
+    LOG("front end: fullscreen left");
+    fs_left(w);
 }
 // The pointer hides on game input while it is over the picture of the active game window (issue #675): AppKit shows it again when the mouse moves, input_release when
 // the window loses focus. The title bar, other windows and other apps keep theirs; the mouse is the touch screen (DmGameView), and moving it shows the pointer
@@ -468,17 +508,33 @@ static void pads_start(void) {
 // not a window-wide event monitor, so clicks on the title bar, the window buttons and the resize edges still reach AppKit.
 // The picture's width / height (front.h front_picture_shape; 16:9 until the first present), which the present fits into the view
 static _Atomic double g_picture_aspect = 16.0 / 9.0;
-void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = (double)w / h; }
-@interface DmGameView : NSView @end
+@interface DmGameView : NSView
+- (void)fitDrawable;
+@end
+void front_picture_shape(int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    g_picture_aspect = (double)w / h;
+    if (g_layer) dispatch_async(dispatch_get_main_queue(), ^{ NSView *v = g_win.contentView; if ([v isKindOfClass:DmGameView.class]) [(DmGameView *)v fitDrawable]; });   // the area it is fitted to may change
+}
 @implementation DmGameView
+// The part of the view the present fits the picture into: all of it, but over the whole screen of a Mac with a camera housing (fs_whole_enter) only the part below the
+// housing's row when the picture fitted to all of it would reach into that row. The drawable is that part's size and the layer keeps it at its bottom (kCAGravityBottom);
+// the row above it shows the layer's black background
+- (NSRect)pictureArea {
+    NSRect b = self.bounds; CGFloat top = g_fs_whole ? self.window.screen.safeAreaInsets.top : 0;
+    if (top <= 0 || b.size.width <= 0 || b.size.height <= top) return b;
+    double fitted = fmin(b.size.height, b.size.width / g_picture_aspect);
+    if ((b.size.height - fitted) / 2 >= top) return b;   // the bar above the picture covers the housing's row
+    b.size.height -= top; return b;   // AppKit's origin is at the bottom left: the row is at the top
+}
 - (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
 - (void)mouseDragged:(NSEvent *)e {
     if (!g_input_on) return;
-    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSRect area = self.pictureArea; NSSize b = area.size;
     double w = b.width, h = b.height;
     if (w <= 0 || h <= 0) return;
-    double a = g_picture_aspect; if (w / h > a) w = h * a; else h = w / a;   // the centered picture the present fits into the view (16:9, or a taller one under DM_SCREEN_ASPECT)
-    double x0 = (b.width - w) / 2, y0 = (b.height - h) / 2;
+    double a = g_picture_aspect; if (w / h > a) w = h * a; else h = w / a;   // the centered picture the present fits into its area (16:9, or a taller one under DM_SCREEN_ASPECT)
+    double x0 = area.origin.x + (b.width - w) / 2, y0 = area.origin.y + (b.height - h) / 2;
     dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};   // The AppKit view origin is at bottom left, the touchscreen origin is at top left
     dm_touch_set(&t, 1); g_mouse_down = 1;
 }
@@ -488,11 +544,30 @@ void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = 
 - (void)fitDrawable {
     CAMetalLayer *l = (CAMetalLayer *)self.layer; if (![l isKindOfClass:CAMetalLayer.class] || !self.window) return;
     l.contentsScale = self.window.backingScaleFactor;
-    NSSize px = [self convertSizeToBacking:self.bounds.size]; if (px.width < 1 || px.height < 1 || CGSizeEqualToSize(l.drawableSize, px)) return;
+    NSSize px = [self convertSizeToBacking:self.pictureArea.size]; if (px.width < 1 || px.height < 1 || CGSizeEqualToSize(l.drawableSize, px)) return;
     l.drawableSize = px; LOG("front end: drawable %.0fx%.0f", px.width, px.height);
 }
 - (void)setFrameSize:(NSSize)s { [super setFrameSize:s]; [self fitDrawable]; }
 - (void)viewDidChangeBackingProperties { [super viewDidChangeBackingProperties]; [self fitDrawable]; }
+@end
+
+// The game's window: fullscreen requests (the green button, the Window menu's item, DM_FULLSCREEN) cover the whole screen of a Mac with a camera housing (fs_whole_enter)
+// and go to macOS's own fullscreen elsewhere. Borderless, it must still take the keyboard: a window that is not key gives the game focus state 2
+@interface DmGameWindow : NSWindow @end
+@implementation DmGameWindow
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return YES; }
+- (void)toggleFullScreen:(id)sender {
+    if (g_fs_whole) fs_whole_leave(self);
+    else if (!(self.styleMask & NSWindowStyleMaskFullScreen) && fs_whole_wanted(self.screen)) fs_whole_enter(self);
+    else [super toggleFullScreen:sender];
+}
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    BOOL r = [super validateMenuItem:item];
+    if (item.action != @selector(toggleFullScreen:)) return r;
+    item.title = win_fullscreen(self) ? @"Exit Full Screen" : @"Enter Full Screen";   // AppKit names the item after macOS's own fullscreen only
+    return g_fs_whole || r;
+}
 @end
 
 // AppKit reports a refused fullscreen request only to the window delegate (there is no notification for it)
@@ -1365,7 +1440,7 @@ void front_run(void (*guest)(void)) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         NSRect r = NSMakeRect(0, 0, 1280, 720);
-        NSWindow *win = [[NSWindow alloc] initWithContentRect:r
+        NSWindow *win = [[DmGameWindow alloc] initWithContentRect:r
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
         win.title = @(DM_GAME_NAME);   // the game profile's name (game name label)
@@ -1378,6 +1453,7 @@ void front_run(void (*guest)(void)) {
         g_layer.device = MTLCreateSystemDefaultDevice();
         g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         g_layer.contentsScale = win.backingScaleFactor;
+        g_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);   // what shows where the drawable does not reach (a camera housing's row, fs_whole_enter)
         // Apple's HUD over the game (frame rate, frame and GPU time, memory): front_hud_env turns it on before the first device. The layer's developerHUDProperties
         // stay unset: mode=default forces this layer's HUD on, so the Metal HUD menu's Hide HUD left it on screen
         if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) LOG("front end: Metal performance HUD on (DM_METAL_HUD)");
@@ -1420,8 +1496,9 @@ void front_run(void (*guest)(void)) {
             static DmWinDelegate *wd; wd = [DmWinDelegate new]; win.delegate = wd;
             __block int want = 1, retried = 0, entering = 0;
             void (^enter)(void) = ^{
-                if (!want || (win.styleMask & NSWindowStyleMaskFullScreen) || !NSApp.isActive || !win.isOnActiveSpace) return;
-                want = 0; entering = 1; [win toggleFullScreen:nil]; };
+                if (!want || win_fullscreen(win) || !NSApp.isActive || !win.isOnActiveSpace) return;
+                want = 0; entering = 1; [win toggleFullScreen:nil];
+                if (g_fs_whole) { entering = 0; g_fs_failed = nil; } };   // over the whole screen it is done at once, and nothing can refuse it
             g_fs_failed = ^{
                 if (!entering) return;
                 entering = 0;
@@ -1460,11 +1537,14 @@ void front_run(void (*guest)(void)) {
         // Input is released when the window stops being key (and when it is minimized) and taken up again when it is key again
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserverForName:NSWindowDidChangeScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); if (win.screen) g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
-        [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); }];
+        [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+            (void)n; screen_refresh(win.screen);
+            if (g_fs_whole && win.screen && !NSEqualRects(win.frame, win.screen.frame)) [win setFrame:win.screen.frame display:YES]; }];   // a new resolution: still the whole screen
         // Entering and leaving fullscreen: the layer is layer-backed, so its frame (and with it the drawable) follows the
-        // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply)
-        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); g_fullscreen = 1; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
-        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_fullscreen = 0; screen_refresh(win.screen); g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
+        // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply).
+        // Fullscreen over the whole screen (fs_whole_enter) calls the same two itself
+        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; fs_entered(win); }];
+        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; fs_left(win); }];
         // DM_FOCUS_KEEP=1 (scripts/regress.py): the game stays in focus while its window is up, whichever app is active. Tears of the Kingdom stops presenting out of focus, so
         // another app taking the key window during an unattended run read as a hang (no frame after the last focus change)
         static int keep = -1; if (keep < 0) keep = getenv("DM_FOCUS_KEEP") && atoi(getenv("DM_FOCUS_KEEP"));
@@ -1577,6 +1657,7 @@ void front_gpu_lost(void) {
             exit(70);
         };
         NSWindow *win = g_win;
+        if (g_fs_whole) { fs_whole_leave(win); tell(); return; }   // left at once
         if (!(win.styleMask & NSWindowStyleMaskFullScreen)) { tell(); return; }
         [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; tell(); }];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), tell);
