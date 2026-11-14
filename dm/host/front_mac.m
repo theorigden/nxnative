@@ -524,9 +524,10 @@ double front_screen_aspect_auto(void) {
     @autoreleasepool { NSScreen *s = NSScreen.mainScreen ?: NSScreen.screens.firstObject; if (!s || s.frame.size.height <= 0) return 0; return s.frame.size.width / s.frame.size.height; }
 }
 extern uint8_t *dm_fps_state;   // loader.c: the frame step state page of a game with one
-// The picture fills the whole view, a camera housing's row included: over the whole screen (fs_whole_enter) with the screen's own shape (within 1%, as the present fills it)
+// The picture fills the whole view, a camera housing's row included: over the whole screen (fs_whole_enter) with the screen's own shape (within 2%, as the present fills it:
+// nvn_mtl.m present_viewport)
 static int picture_fills_screen(NSRect b) {
-    return g_fs_whole && b.size.height > 0 && fabs(b.size.width / b.size.height / g_picture_aspect - 1) < 0.01;
+    return g_fs_whole && b.size.height > 0 && fabs(b.size.width / b.size.height / g_picture_aspect - 1) < 0.02;
 }
 // The HUD's top inset (state +0x64, float, layout units; read by the game's HUD anchoring, duo_anchor.c, each frame): the housing's row in the game's layout space while the
 // picture fills it, 0 otherwise. The layout height is +0x4c (0 = 16:9: no screen shape, nothing to write)

@@ -167,6 +167,30 @@ def screen_shape(ctx):
     stub(0x3de5b8, '03901629', (None, 0xb9404a11, 0x34000131, 0x7110e09f, 0x540000e1, 0x711e007f, 0x540000a1, 0x2a1103e4, 0xb9406a11, 0x34000051, 0x2a1103e3,
                                 0x29169003),
          'window crop 1920x1080 → the host\'s output size')
+    # The layout objects' own 1280x720: each takes the layout height while its bit of state +0x54 is set (loader.c DM_SCREEN_ASPECT_SITES, all by default), so one build
+    # can try them one by one (Breath of the Wild's taller_bit). The int pair in x24 and the float pair in x25 at main+0x2880b3c / main+0x2880b40 (the UI system's setup:
+    # 1280x720 and 1280.0, 720.0), and the 1280x720 defaults of four objects (main+0x2880e34 +0x288, main+0xd47068 +0x310, main+0x6ee938 +0x1fc, main+0x8c3fe8: eight slots).
+    # x16 is unused around each site
+    def taller_bit(site, orig, bit, load, apply, why):
+        fs_site(site, orig)
+        start = here(); emit(struct.unpack('<I', bytes.fromhex(orig))[0])
+        emit(ADRP(16, here(), STATE))
+        emit(0xb9405610); emit(0x36000000 | bit << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x54]; tbz w16,#bit,back (+5)
+        emit(ADRP(16, here(), STATE))
+        for w in (load, 0x34000050, apply):
+            emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], why)
+    LAY, LAYF = 0xb9404e10, 0xb9405210   # ldr w16,[x16,#0x4c] / #0x50
+    hi = lambda r: 0xb3607e00 | r          # bfi x<r>,x16,#32,#32 (the pair's height)
+    for bit, (site, orig, load, r, why) in enumerate((
+            (0x2880b3c, '185ac0f2', LAY, 24, '1280x720 (int) in the UI system\'s setup'),
+            (0x2880b40, '9986e8f2', LAYF, 25, '1280.0, 720.0 in the UI system\'s setup'),
+            (0x2880e34, '085ac0f2', LAY, 8, '1280x720 default of an object (+0x288)'),
+            (0xd47068, '085ac0f2', LAY, 8, '1280x720 default of an object (+0x310)'),
+            (0x6ee938, '0a5ac0f2', LAY, 10, '1280x720 default of an object (+0x1fc)'),
+            (0x8c3fe8, '0a5ac0f2', LAY, 10, '1280x720 defaults of an object (eight slots)'))):
+        taller_bit(site, orig, bit, load, hi(r), why)
     FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
                 0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
                 'half_to_s0', 'tanf', None, 0xbd405e01, 0x1e210800, 'atanf', 's0_to_half', 0x1e202800, 0xbd00a260,
@@ -196,6 +220,8 @@ def screen_shape(ctx):
     for i in range(0, len(_duo_anchor), 8): emit(int(_duo_anchor[i:i + 8], 16))
     fs_site(0x593110, '68624139')
     start = here(); emit(ADRP(16, here(), STATE))
+    emit(0xb9405611)   # ldr w17, [x16, #0x54]   sites
+    emit(0x36400111)   # tbz w17, #8, orig (+8)   bit 8: the HUD anchoring
     emit(0xb9404a11)   # ldr w17, [x16, #0x48]   the output's height (0 = 16:9)
     emit(0x340000d1)   # cbz w17, orig (+6)
     emit(0xaa1303e0)   # mov x0, x19
