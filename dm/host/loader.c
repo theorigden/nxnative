@@ -317,6 +317,10 @@ static void install_fps_state(module_t *m) {
 }
 // The settings in the state page, written when the game starts (main.c, after host loading): on iOS the loading runs at app launch, before the launcher has set DM_FPS_TARGET and
 // DM_RENDER_SCALE (Launcher.swift), and nothing reads the page before the game runs
+// The front end's screen queries (front_mac.m, front_ios.m): weak defaults that answer "not known" for a host without a front end (unit tests), as hle_vi.c does
+__attribute__((weak)) int front_display_pixels(int *w, int *h) { (void)w; (void)h; return 0; }
+__attribute__((weak)) int front_display_panel_pixels(int *w, int *h) { (void)w; (void)h; return 0; }
+__attribute__((weak)) double front_screen_aspect_auto(void) { return 0; }
 void dm_fps_state_apply(void) {
     if (!dm_fps_state) return;
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
@@ -341,8 +345,7 @@ void dm_fps_state_apply(void) {
     // window opens on, its whole frame with a camera housing's row (fullscreen covers it: fs_whole_enter), 16:9 when it is outside 1.3 to 1.77 (a 16:9 display such as the Pro Display XDR)
     char autov[16];
     if (as && !strcmp(as, "auto")) {
-        extern double front_screen_aspect_auto(void) __attribute__((weak));
-        double r = front_screen_aspect_auto ? front_screen_aspect_auto() : 0;
+        double r = front_screen_aspect_auto();
         if (r >= 1.3 && r < 1.77) { snprintf(autov, sizeof autov, "%.3f", r); as = autov; } else as = "0";
         LOG("%s: picture shape auto: the screen is %.3f:1 → %s", g_fps_mod, r, as);
     }
@@ -355,8 +358,7 @@ void dm_fps_state_apply(void) {
         int pw = 0, ph = 0;
         if (!DM_GAME_OUTPUT_SIZE) LOG("[RED] DM_OUTPUT_RES=%s: this game's profile has no output-size stubs (output_size); keeping 1920 wide", orv);
         else if (!strcmp(orv, "native")) {   // the display's panel (front_display_panel_pixels: not a scaled mode's larger backing store), else its current pixels
-            extern int front_display_pixels(int *, int *) __attribute__((weak)); extern int front_display_panel_pixels(int *, int *) __attribute__((weak));
-            if (!(front_display_panel_pixels && front_display_panel_pixels(&pw, &ph)) && !(front_display_pixels && front_display_pixels(&pw, &ph))) LOG("[RED] DM_OUTPUT_RES=native: the display's size is not known; keeping 1920 wide");
+            if (!front_display_panel_pixels(&pw, &ph) && !front_display_pixels(&pw, &ph)) LOG("[RED] DM_OUTPUT_RES=native: the display's size is not known; keeping 1920 wide");
             else LOG("%s: output size native: the display's %dx%d (DM_OUTPUT_RES)", g_fps_mod, pw, ph);
         }
         else if (sscanf(orv, "%dx%d", &pw, &ph) != 2) LOG("[RED] DM_OUTPUT_RES=%s: native or <width>x<height>; keeping 1920 wide", orv);
