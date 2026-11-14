@@ -47,6 +47,26 @@ int front_display_pixels(int *w, int *h) {
     if (a <= 0 || b <= 0) return 0;
     *w = a; *h = b; return 1;
 }
+// The display's own panel in pixels, no larger than the current mode's pixels (front.h): a scaled mode's backing store can be larger than the panel (a 3:2 MateView at "looks like
+// 2560x1707" draws 5120x3414 for a 3840x2560 panel; macOS scales it down), and a picture rendered past the panel's pixels is only scaled down again. The panel is the mode
+// macOS flags native (kDisplayModeNativeFlag), else the mode with the most pixels. A 16" MacBook Pro's default mode is its panel, 3456x2234
+int front_display_panel_pixels(int *w, int *h) {
+    int cw, ch; if (!front_display_pixels(&cw, &ch)) return 0;
+    CGDirectDisplayID id = g_screen_id ? g_screen_id : CGMainDisplayID();
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(id, (__bridge CFDictionaryRef)@{(__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES});
+    int nw = 0, nh = 0, bw = 0, bh = 0;
+    for (CFIndex i = 0; modes && i < CFArrayGetCount(modes); i++) {
+        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        int pw = (int)CGDisplayModeGetPixelWidth(m), ph = (int)CGDisplayModeGetPixelHeight(m);
+        if (CGDisplayModeGetIOFlags(m) & 0x02000000 /* kDisplayModeNativeFlag */) { if (pw * ph > nw * nh) { nw = pw; nh = ph; } }
+        if (pw * ph > bw * bh) { bw = pw; bh = ph; }
+    }
+    if (modes) CFRelease(modes);
+    if (!nw) { nw = bw; nh = bh; }
+    *w = cw; *h = ch;
+    if (nw > 0 && nh > 0 && nw * nh < cw * ch) { *w = nw; *h = nh; }
+    return 1;
+}
 static _Atomic int g_screen_variable_refresh;
 int front_screen_variable_refresh(void) { return g_screen_variable_refresh; }
 static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabilities of the current screen and mode, including a mode change without moving the window
@@ -1465,8 +1485,8 @@ void front_run(void (*guest)(void)) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         NSRect r = NSMakeRect(0, 0, 1280, 720);
-        uint32_t oh = 0; if (dm_fps_state) memcpy(&oh, dm_fps_state + 0x48, 4);
-        if (oh) r.size.height = round(1280.0 * oh / 1920);   // a screen shape (DM_SCREEN_ASPECT): the window starts in it
+        uint32_t oh = 0, ow = 0; if (dm_fps_state) { memcpy(&oh, dm_fps_state + 0x48, 4); memcpy(&ow, dm_fps_state + 0x68, 4); }
+        if (oh) r.size.height = round(1280.0 * oh / (ow ? ow : 1920));   // a screen shape or output size (DM_SCREEN_ASPECT, DM_OUTPUT_RES): the window starts in its shape
         NSWindow *win = [[DmGameWindow alloc] initWithContentRect:r
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];

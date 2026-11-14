@@ -334,7 +334,11 @@ void dm_fps_state_apply(void) {
     if (orv && *orv && strcmp(orv, "0")) {
         int pw = 0, ph = 0;
         if (!DM_GAME_OUTPUT_SIZE) LOG("[RED] DM_OUTPUT_RES=%s: this game's profile has no output-size stubs (output_size); keeping 1920 wide", orv);
-        else if (!strcmp(orv, "native")) { extern int front_display_pixels(int *, int *) __attribute__((weak)); if (!front_display_pixels || !front_display_pixels(&pw, &ph)) LOG("[RED] DM_OUTPUT_RES=native: the display's size is not known; keeping 1920 wide"); }
+        else if (!strcmp(orv, "native")) {   // the display's panel (front_display_panel_pixels: not a scaled mode's larger backing store), else its current pixels
+            extern int front_display_pixels(int *, int *) __attribute__((weak)); extern int front_display_panel_pixels(int *, int *) __attribute__((weak));
+            if (!(front_display_panel_pixels && front_display_panel_pixels(&pw, &ph)) && !(front_display_pixels && front_display_pixels(&pw, &ph))) LOG("[RED] DM_OUTPUT_RES=native: the display's size is not known; keeping 1920 wide");
+            else LOG("%s: output size native: the display's %dx%d (DM_OUTPUT_RES)", g_fps_mod, pw, ph);
+        }
         else if (sscanf(orv, "%dx%d", &pw, &ph) != 2) LOG("[RED] DM_OUTPUT_RES=%s: native or <width>x<height>; keeping 1920 wide", orv);
         if (pw >= 640 && pw <= 7680 && ph > 0) ow = (uint32_t)pw & ~1u;
         else if (pw || ph) LOG("[RED] DM_OUTPUT_RES=%s: %dx%d is outside 640 to 7680 wide; keeping 1920 wide", orv, pw, ph);

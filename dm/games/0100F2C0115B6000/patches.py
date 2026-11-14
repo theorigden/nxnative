@@ -175,10 +175,15 @@ def screen_shape(ctx):
          'final image (agl::RenderDisplay) 1920x1080 → the host\'s output size')
     # HUD projection: main+0x1c0a40 (x0 the owner of an nn::ui2d::DrawInfo, s0 / s1 the screen's width and height) builds the layouts' orthographic projection
     # (far 300) and stores it in the DrawInfo (main+0x1c0ddc), from which each pane's uniform block takes it (main+0x10cc93c). The HUD drawn into the final image gets
-    # (1920.0, 1080.0) there (main+0x872a34): a 1920x1080 screen becomes the output's size, so the HUD keeps its shape in a taller final image. x16 / x17 are free at entry
-    stub(0x1c0a50, '12102c1e', (0x1e2c1012, 0x1e260011, 0x52a89e10, 0x6b10023f, 0x54000181, 0x1e260031, 0x52a890f0, 0x6b10023f, 0x54000101, None, 0xb9404a11,
-                               0x340000b1, 0x1e230221, 0xb9406a11, 0x34000051, 0x1e230220),
-         'HUD projection 1920x1080 → the host\'s output size')
+    # (1920.0, 1080.0) there (main+0x872a34): a 1920x1080 screen becomes 1920 wide in the output's shape (1920 x output height / output width), so the HUD keeps its shape
+    # and its size relative to the screen in a taller or larger final image (the layouts are in 1920-wide units: a projection of the output's pixels drew a 3456-wide
+    # output's HUD at its 1920 size in the middle). x16 / x17 and s16 are free at entry
+    stub(0x1c0a50, '12102c1e', (0x1e2c1012, 0x1e260011, 0x52a89e10, 0x6b10023f, 0x540001c1, 0x1e260031, 0x52a890f0, 0x6b10023f, 0x54000141, None, 0xb9404a11,
+                               0x340000f1, 0x1e230221, 0xb9406a11, 0x34000091,
+                               0x1e230230,    # ucvtf s16,w17   output width
+                               0x1e301821,    # fdiv s1,s1,s16
+                               0x1e200821),   # fmul s1,s1,s0   1920 x height / width
+         'HUD projection 1920x1080 → 1920 wide in the output\'s shape')
     # The layout objects' own 1280x720: each takes the layout height while its bit of state +0x54 is set (loader.c DM_SCREEN_ASPECT_SITES, all by default), so one build
     # can try them one by one (Breath of the Wild's taller_bit). The int pair in x24 and the float pair in x25 at main+0x2880b3c / main+0x2880b40 (the UI system's setup:
     # 1280x720 and 1280.0, 720.0), and the 1280x720 defaults of four objects (main+0x2880e34 +0x288, main+0xd47068 +0x310, main+0x6ee938 +0x1fc, main+0x8c3fe8: eight slots).
