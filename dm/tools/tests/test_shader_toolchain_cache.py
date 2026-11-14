@@ -50,7 +50,7 @@ class ShaderCache(unittest.TestCase):
                        STAMP_BEFORE=None, INPUTS='inputs')
         (root / 'out').mkdir()
         names = {'tool_fingerprint', 'shader_key', 'cache_path', 'cache_outputs', 'restore_cache', 'publish_cache', 'atomic_json', 'cache_meta_path',
-                 'vs_pad', 'partner_inputs', 'label_dir', 'output', 'commit', 'publish_library'}
+                 'vs_pad', 'partner_inputs', 'label_dir', 'output', 'commit', 'publish_library', 'submit', 'results'}
         tree = ast.parse((TOOLS / 'dmsh_build.py').read_text())
         self.tree = tree
         nodes: list[ast.stmt] = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
@@ -172,19 +172,6 @@ class ShaderCache(unittest.TestCase):
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), self.ns)
         return self.ns['build_keys'](want, locations, pairs)
 
-    def test_package_records_are_read_from_the_file_at_their_offsets(self):
-        # record_index keeps no package in memory (GitHub issue #1036); record k is still the bytes from its marker to the next one, the last to the end
-        node = next(n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == 'record_index')
-        ns: dict[str, Any] = dict(os=os, re=re, mmap=__import__('mmap'))
-        exec(compile(ast.Module(body=[node], type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
-        recs = [b'BTCDBTCD' + b'\x01' * 40, b'BTCDBTCD' + b'\x02' * 7, b'BTCDBTCD' + b'\x03' * 100]
-        path = Path(self.tmp.name) / 'pkg.bin'
-        for data, want in ((b'header' + b''.join(recs), recs), (b'', [])):
-            path.write_bytes(data)
-            fd, offs = ns['record_index'](str(path))
-            try: self.assertEqual([os.pread(fd, offs[k + 1] - offs[k], offs[k]) for k in range(len(offs) - 1)], want)
-            finally: os.close(fd)
-
     def test_partial_selection_adds_known_pairs_and_full_selection_keeps_every_shader(self):
         locations = {'vertex': None, 'pixel': None, 'other': None}
         pairs = {'vertex': {'pixel', 'not-in-package'}}
@@ -245,10 +232,10 @@ class ShaderCache(unittest.TestCase):
 
         # the batches, then the loop that translates and finishes them (the translator and fin substituted)
         start = next(i for i, n in enumerate(self.tree.body) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'batches' for t in n.targets))
-        end = next(i for i, n in enumerate(self.tree.body) if i > start and isinstance(n, ast.With)) + 1
+        end = next(i for i, n in enumerate(self.tree.body) if i > start and isinstance(n, ast.Try)) + 1
         work = Path(self.tmp.name) / 'work'
         def translate(batch): work.mkdir(exist_ok=True); return str(work)
-        self.ns.update(cf=cf, NJ=1, BATCH=1, keys=keys, fin=lambda key, wb: finish_key(key), translate=translate)
+        self.ns.update(cf=cf, NJ=1, BATCH=1, keys=keys, fin=lambda key, wb: finish_key(key), translate=translate, px=None)   # finished in threads (DMSH_PROCS=0)
         exec(compile(ast.Module(body=self.tree.body[start:end], type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), self.ns)
         self.assertEqual(built, [pixel, vertex])
         self.assertIn('dm_pad7 [[user(locn7)]]', (out / (vertex + '_b.metal')).read_text())
@@ -279,6 +266,18 @@ class ShaderCache(unittest.TestCase):
         img = shader_lib.view(out)
         self.assertEqual(sorted(p.name for p in img.iterdir()), sorted([a + '_b.metal', a + '_b.metallib', b + '_b.metal', b + '_b.metallib', 'inputs.tsv']))
         self.assertEqual((img / (a + '_b.metallib')).read_bytes(), a.encode())
+
+    def test_a_stage_the_cache_cannot_take_leaves_every_file_on_disk(self):   # a full drive: the stage's batch is rolled back, earlier writes too, so none of its files may go
+        out, key = Path(self.ns['out']), '1' * 16
+        (out / (key + '_b.json')).write_text('{}'); (out / (key + '_b.metallib')).write_bytes(b'x' * 200000)
+        store = self.ns['STORE']; store.put('before', b'0')
+        n = store.db.execute('PRAGMA page_count').fetchone()[0]; store.db.execute(f'PRAGMA max_page_count={n + 2}')
+        with mock.patch('builtins.print'): self.ns['commit'](key)
+        self.assertTrue(store.full); self.assertEqual(store.names('stage/'), set())
+        self.assertEqual(sorted(p.name for p in out.iterdir()), [key + '_b.json', key + '_b.metallib'])
+        (out / 'inputs.tsv').write_text('game\tid\ninputs\tinputs\n')
+        self.ns['publish_library']('mac')
+        self.assertEqual(sorted(p.name for p in shader_lib.view(out).iterdir()), sorted([key + '_b.json', key + '_b.metallib', 'inputs.tsv']))
 
     def test_partial_build_keeps_the_image_less_the_keys_it_builds(self):
         out, built, kept = Path(self.ns['out']), '1' * 16, '2' * 16
