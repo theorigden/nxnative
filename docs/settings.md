@@ -6,7 +6,7 @@ The screen before the game starts shows the settings the game supports. A settin
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game's upscaler](#games-upscaler), [Game language](#game-language), [Picture](#picture), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Controller buttons](#controller-buttons)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
-- [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
+- [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode), [Sound](#sound)
 - [In-game menu](#in-game-menu)
 - [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
@@ -241,6 +241,10 @@ Turn off **Show this window at launch** to start the game at once with your choi
 
 On a MacBook with a notch, fullscreen covers the whole screen, the strip beside the notch included, where macOS's own fullscreen leaves that strip black; the menu bar and the Dock appear when the pointer reaches them. A picture of the screen's own shape ([Picture shape](#picture-shape) **Match screen**, in games that support it) fills the whole screen, the strip beside the notch too, and the game keeps its HUD below the notch. Any other picture is never drawn behind the notch: a 16:9 picture is centred on the whole screen, its black bars covering the strip, and a picture too tall for that sits just below the notch. You can't swipe to this fullscreen as to another Space; use ⌘Tab. `DM_FULLSCREEN_NOTCH=0` in the `env.txt` uses macOS's own fullscreen instead.
 
+### Sound
+
+**Spatial audio** (the default) or **Stereo**. With Spatial audio the game is told it plays on a 5.1 system, as a Switch docked to a surround TV, and games that mix surround (Tears of the Kingdom) send front, centre, rear and LFE channels. The Mac renders them through Apple's spatial audio: on headphones the sound comes from around you, and AirPods with head tracking keep it in place as you turn your head; on the built-in speakers it is widened for them. A receiver or TV set up for 5.1 in Audio MIDI Setup (Configure Speakers) gets the six channels as they are. Plugging in or removing headphones, or connecting AirPods, switches the rendering while you play. Games that mix only stereo sound as before. **Stereo** tells the game it has two speakers. In an `env.txt`: `DM_AUDIO_SURROUND=spatial` or `stereo`.
+
 ### Switch 2 controllers
 
 **Off** by default. On, the game takes Joy-Con 2 and Pro Controller 2 over Bluetooth: hold the small Sync button on one during the game, until its player lights sweep, to pair it with this Mac; after that a press of any of its buttons connects it ([Switch 2 controllers](playing.md#switch-2-controllers-mac)). macOS asks for Bluetooth access the first time, and again after the app is packed again. In an `env.txt`: `DM_SW2=1`.
@@ -282,6 +286,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Console mode | `DM_OPMODE` | `1` docked, `0` handheld |
 | Game language | `DM_LANG` | a language code, such as `ja` |
 | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
+| Sound (Mac) | `DM_AUDIO_SURROUND` | `spatial` 5.1 through spatial audio, `stereo` |
 | Cloud saves folder (Mac) | `DM_SAVE_SYNC` | a folder; `icloud`: iCloud Drive › nxnative Saves; `0`: off |
 | Picture (iPhone and iPad) | `DM_PICTURE_FIT` | `fit` 16:9 with black bars, `fill` covers the screen, cropped |
 | Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is taller than 16:9 (iPad 4:3, iPhone Duo 1.43:1), else 16:9; on a Mac the shape of the screen the game opens on (a MacBook Pro's 1.55:1, past its camera housing in fullscreen), 16:9 on a 16:9 display; `1.43` the iPhone Duo's shape, `0` 16:9 |

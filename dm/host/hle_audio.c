@@ -12,6 +12,10 @@
 enum { FMT_PCM16 = 2, STATE_STARTED = 0, STATE_STOPPED = 1, RATE = 48000 };
 enum { BK_NONE, BK_AU, BK_NULL };   // what is consuming an output's queue right now (aout.backend)
 enum { AU_IDLE, AU_STARTING, AU_CANCELED, AU_WAIT_CALLBACK };
+// How a six-channel output (5.1: front-left front-right center LFE back-left back-right) reaches the device (aout.route). Stereo: downmixed here (pull_device), the only way on iOS and
+// with the surround output off. With it on (Mac, DM_AUDIO_SURROUND): through an AUSpatialMixer in front of the output unit, which renders the bed for headphones (binaural, with AirPods'
+// head tracking) or the built-in speakers; or, to a device whose preferred channel layout holds all six 5.1 speakers (an HDMI receiver or TV set up for 5.1), unchanged through a channel map
+enum { RT_STEREO, RT_SPATIAL, RT_DISCRETE };
 
 typedef struct { void *ptr; uint64_t cap, size; } gbuf;     // The first 24 bytes written into the guest AudioOutBuffer
 #define QMAX 64
@@ -43,6 +47,10 @@ typedef struct {
     _Atomic uint64_t cb_n;             // device callbacks of this output (the watchdog's evidence that the device still plays it)
     uint64_t wd_n, wd_t;               // watchdog: callback count last seen and when it last moved (under g_aos_lock)
     int stalled, retry_ms; uint64_t retry_at;   // the device stopped calling back (or would not start): the silent sink stands in and the watchdog retries the AudioUnit at retry_at, backing off
+    int route, route_listen;           // RT_*, set when the unit is made; route_listen: au_route_changed is registered on the unit
+    AudioUnit mix;                     // RT_SPATIAL: the spatial mixer the output unit pulls from
+    _Atomic uint32_t sp_type;          // RT_SPATIAL: its output type (kSpatialMixerOutputType_*)
+    _Atomic int rebuild;               // the device now wants another route: the watchdog makes the units again
 } aout;
 
 // Registry of open outputs: suspended / resumed all at once by the front-end lifecycle (going to background).
@@ -129,9 +137,9 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
 // A six-channel output (front-left front-right center LFE back-left back-right) goes to the device as stereo, downmixed here with the audio renderer's default Q15 coefficients (hle_audren.c):
 // Core Audio's own 6 → 2 mapping keeps only the front pair, so voices on the center (Luigi's Mansion 3) and the back channels were silent. The queue still takes all six guest channels,
 // in blocks through a stack buffer (no allocation in the real-time callback)
-static int device_channels(const aout *a) { return a->ch == 6 ? 2 : a->ch; }
+static int device_channels(const aout *a) { return a->ch == 6 && a->route == RT_STEREO ? 2 : a->ch; }
 static void pull_device(aout *a, uint8_t *dst, uint64_t bytes) {
-    if (a->ch != 6) { pull(a, dst, bytes); return; }
+    if (a->ch != 6 || a->route != RT_STEREO) { pull(a, dst, bytes); return; }
     enum { BLOCK = 128, CF = 32768, CC = 23167, CL = 8224, CB = 23167 };
     int16_t scratch[BLOCK * 6], *out = (int16_t *)dst;
     uint64_t frames = bytes / (2 * sizeof *out);
@@ -152,9 +160,7 @@ static void pull_device(aout *a, uint8_t *dst, uint64_t bytes) {
 
 static _Atomic uint64_t g_render_calls;   // Cumulative sound card callbacks (lifecycle verification: must keep growing after resume)
 uint64_t dm_audio_render_calls(void) { return atomic_load_explicit(&g_render_calls, memory_order_relaxed); }
-static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
-    (void)f; (void)ts; (void)bus; (void)frames;
-    aout *a = ctx;
+static void au_tick(aout *a, UInt32 frames) {   // each device callback, of the output unit or (spatial) of the mixer's input
     atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed); atomic_fetch_add_explicit(&a->cb_n, 1, memory_order_relaxed);
     {
         // At each 2000-callback checkpoint publish a snapshot for the watchdog: LOG takes a stdio lock and must never run here or in the release-event notifier.
@@ -168,6 +174,11 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
             atomic_store_explicit(&a->st_pending, 1, memory_order_release);
             a->st_fmin = ~0u; a->st_fmax = 0; a->st_qsum = a->st_count = 0; a->st_u0 = un; a->st_ub0 = ubb;
         } }
+}
+static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
+    (void)f; (void)ts; (void)bus;
+    aout *a = ctx;
+    au_tick(a, frames);
     if (atomic_load_explicit(&a->hold_device, memory_order_acquire)) {
         memset(bl->mBuffers[0].mData, 0, bl->mBuffers[0].mDataByteSize);
     } else {
@@ -207,13 +218,162 @@ static void au_device_changed(void *ctx, AudioUnit au, AudioUnitPropertyID id, A
         au_buffer(au, ", after output changed");
 }
 #endif
-static void au_dispose(AudioUnit au) {
+#if !TARGET_OS_IPHONE
+// The spatial mixer's input: the output's six int16 channels as six float buffers (its input format), pulled in blocks through a stack buffer as pull_device does
+static OSStatus sp_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
+    (void)f; (void)ts; (void)bus;
+    aout *a = ctx;
+    au_tick(a, frames);
+    UInt32 nb = bl->mNumberBuffers < 6 ? bl->mNumberBuffers : 6;
+    if (atomic_load_explicit(&a->hold_device, memory_order_acquire)) {
+        for (UInt32 c = 0; c < bl->mNumberBuffers; c++) memset(bl->mBuffers[c].mData, 0, bl->mBuffers[c].mDataByteSize);
+        return noErr;
+    }
+    enum { BLOCK = 128 };
+    int16_t scratch[BLOCK * 6];
+    for (UInt32 done = 0; done < frames;) {
+        UInt32 n = frames - done < BLOCK ? frames - done : BLOCK;
+        pull(a, (uint8_t *)scratch, (uint64_t)n * 6 * sizeof *scratch);
+        for (UInt32 c = 0; c < nb; c++) {
+            float *d = (float *)bl->mBuffers[c].mData + done;
+            for (UInt32 i = 0; i < n; i++) d[i] = a->mute ? 0.f : scratch[6 * i + c] * (1.f / 32768.f);
+        }
+        done += n;
+    }
+    return noErr;
+}
+// What the current device wants for a 5.1 output. Discrete when the device's preferred channel layout (Audio MIDI Setup's speaker configuration) has every 5.1 speaker:
+// kAudioFormatProperty_ChannelMap maps MPEG 5.1 A (L R C LFE Ls Rs, the guest's order) onto it. Otherwise spatial, rendered for the kind of device: Bluetooth (AirPods and other headsets)
+// and the built-in output's headphone source ('hdpn', kIOAudioOutputPortSubTypeHeadphones) as headphones, the built-in speakers as such, anything else as external speakers in stereo
+enum { MAP_MAX = 64 };
+typedef struct { int route; UInt32 type, nmap, dev_ch; SInt32 map[MAP_MAX]; char name[128]; } route_t;
+static OSStatus dev_get(AudioDeviceID d, AudioObjectPropertySelector sel, AudioObjectPropertyScope scope, void *data, UInt32 size) {
+    AudioObjectPropertyAddress ad = {sel, scope, kAudioObjectPropertyElementMain};
+    return AudioObjectGetPropertyData(d, &ad, 0, NULL, &size, data);
+}
+static void route_probe(AudioUnit au, route_t *r) {
+    memset(r, 0, sizeof *r); r->route = RT_SPATIAL; r->type = kSpatialMixerOutputType_ExternalSpeakers; strlcpy(r->name, "(no device)", sizeof r->name);
+    AudioDeviceID dev = kAudioObjectUnknown; UInt32 sz = sizeof dev;
+    if (AudioUnitGetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &dev, &sz) || dev == kAudioObjectUnknown) return;
+    CFStringRef nm = NULL;
+    if (!dev_get(dev, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal, &nm, sizeof nm) && nm) { CFStringGetCString(nm, r->name, sizeof r->name, kCFStringEncodingUTF8); CFRelease(nm); }
+    AudioObjectPropertyAddress ad = {kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMain};
+    if (!AudioObjectGetPropertyDataSize(dev, &ad, 0, NULL, &sz) && sz >= sizeof(AudioBufferList)) {
+        AudioBufferList *bl = malloc(sz);
+        if (bl && !AudioObjectGetPropertyData(dev, &ad, 0, NULL, &sz, bl)) for (UInt32 i = 0; i < bl->mNumberBuffers; i++) r->dev_ch += bl->mBuffers[i].mNumberChannels;
+        free(bl);
+    }
+    ad.mSelector = kAudioDevicePropertyPreferredChannelLayout;
+    if (r->dev_ch >= 6 && r->dev_ch <= MAP_MAX && !AudioObjectGetPropertyDataSize(dev, &ad, 0, NULL, &sz) && sz >= sizeof(AudioChannelLayout)) {
+        AudioChannelLayout *dl = malloc(sz);
+        if (dl && !AudioObjectGetPropertyData(dev, &ad, 0, NULL, &sz, dl)) {
+            AudioChannelLayout in = {.mChannelLayoutTag = kAudioChannelLayoutTag_MPEG_5_1_A};
+            const AudioChannelLayout *pair[2] = {&in, dl};
+            UInt32 msz = sizeof r->map;
+            for (int i = 0; i < MAP_MAX; i++) r->map[i] = -1;
+            if (!AudioFormatGetProperty(kAudioFormatProperty_ChannelMap, sizeof pair, pair, &msz, r->map)) {
+                unsigned seen = 0;
+                for (UInt32 i = 0; i < msz / sizeof *r->map; i++) if (r->map[i] >= 0 && r->map[i] < 6) seen |= 1u << r->map[i];
+                if (seen == 0x3f) { r->route = RT_DISCRETE; r->nmap = msz / sizeof *r->map; }
+            }
+        }
+        free(dl);
+    }
+    if (r->route == RT_DISCRETE) return;
+    UInt32 transport = 0, src = 0;
+    dev_get(dev, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, &transport, sizeof transport);
+    if (transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE) r->type = kSpatialMixerOutputType_Headphones;
+    else if (transport == kAudioDeviceTransportTypeBuiltIn)
+        r->type = !dev_get(dev, kAudioDevicePropertyDataSource, kAudioObjectPropertyScopeOutput, &src, sizeof src) && src == 'hdpn' ? kSpatialMixerOutputType_Headphones : kSpatialMixerOutputType_BuiltInSpeakers;
+}
+static const char *sp_type_name(UInt32 t) {
+    return t == kSpatialMixerOutputType_Headphones ? "headphones" : t == kSpatialMixerOutputType_BuiltInSpeakers ? "built-in speakers" : "external speakers (stereo)";
+}
+// Head tracking (AirPods' motion sensors) only means something for headphones; the mixer ignores it where the headphones have none
+static void sp_set_type(aout *a, UInt32 type, const char *why) {
+    UInt32 ht = type == kSpatialMixerOutputType_Headphones;
+    OSStatus st = AudioUnitSetProperty(a->mix, kAudioUnitProperty_SpatialMixerOutputType, kAudioUnitScope_Global, 0, &type, sizeof type);
+    OSStatus sh = AudioUnitSetProperty(a->mix, kAudioUnitProperty_SpatialMixerEnableHeadTracking, kAudioUnitScope_Global, 0, &ht, sizeof ht);
+    atomic_store(&a->sp_type, type);
+    if (why) LOG("%saudio #%d spatial audio now renders for %s%s (status %d), head tracking %s (status %d)", st ? "[RED] " : "", a->id, sp_type_name(type), why, (int)st, ht ? "on" : "off", (int)sh);
+}
+static AudioStreamBasicDescription float_format(UInt32 ch) {
+    return (AudioStreamBasicDescription){.mSampleRate = RATE, .mFormatID = kAudioFormatLinearPCM, .mFormatFlags = kAudioFormatFlagsNativeFloatPacked | kAudioFormatFlagIsNonInterleaved,
+                                         .mBytesPerPacket = 4, .mFramesPerPacket = 1, .mBytesPerFrame = 4, .mChannelsPerFrame = ch, .mBitsPerChannel = 32};
+}
+// The AUSpatialMixer: one input bus, the 5.1 bed (six float channels, layout MPEG 5.1 A) as an ambience bed (kSpatialMixerSourceMode_AmbienceBed: each channel a far-field source in
+// its layout's direction), spatialized by kSpatializationAlgorithm_UseOutputType for the output type of the route; stereo float out, which the output unit converts to the device
+static OSStatus sp_create(aout *a, const route_t *r) {
+    AudioComponentDescription d = {.componentType = kAudioUnitType_Mixer, .componentSubType = kAudioUnitSubType_SpatialMixer, .componentManufacturer = kAudioUnitManufacturer_Apple};
+    AudioComponent c = AudioComponentFindNext(NULL, &d);
+    a->mix = NULL; if (!c || AudioComponentInstanceNew(c, &a->mix)) { a->mix = NULL; LOG("[RED] audio #%d: no AUSpatialMixer", a->id); return -1; }
+    AudioStreamBasicDescription in = float_format(6), out = float_format(2);
+    AudioChannelLayout lin = {.mChannelLayoutTag = kAudioChannelLayoutTag_MPEG_5_1_A}, lout = {.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo};
+    UInt32 one = 1, alg = kSpatializationAlgorithm_UseOutputType, mode = kSpatialMixerSourceMode_AmbienceBed, maxf = 4096, hrtf = kSpatialMixerPersonalizedHRTFMode_Auto;
+    AURenderCallbackStruct cb = {sp_render, a};
+    AudioUnitConnection conn = {.sourceAudioUnit = a->mix, .sourceOutputNumber = 0, .destInputNumber = 0};
+    struct { AudioUnit u; AudioUnitPropertyID id; AudioUnitScope sc; const void *v; UInt32 n; const char *what; } steps[] = {
+        {a->mix, kAudioUnitProperty_ElementCount, kAudioUnitScope_Input, &one, sizeof one, "input bus count"},
+        {a->mix, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, &in, sizeof in, "input format (6 channels)"},
+        {a->mix, kAudioUnitProperty_AudioChannelLayout, kAudioUnitScope_Input, &lin, sizeof lin, "input layout (MPEG 5.1 A)"},
+        {a->mix, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, &out, sizeof out, "output format (stereo)"},
+        {a->mix, kAudioUnitProperty_AudioChannelLayout, kAudioUnitScope_Output, &lout, sizeof lout, "output layout (stereo)"},
+        {a->mix, kAudioUnitProperty_SpatializationAlgorithm, kAudioUnitScope_Input, &alg, sizeof alg, "spatialization (use output type)"},
+        {a->mix, kAudioUnitProperty_SpatialMixerSourceMode, kAudioUnitScope_Input, &mode, sizeof mode, "source mode (ambience bed)"},
+        {a->mix, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, &maxf, sizeof maxf, "frames per slice"},
+        {a->mix, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, &cb, sizeof cb, "input callback"},
+    };
+    OSStatus st = noErr; const char *what = "";
+    for (unsigned i = 0; i < sizeof steps / sizeof *steps && !st; i++) { st = AudioUnitSetProperty(steps[i].u, steps[i].id, steps[i].sc, 0, steps[i].v, steps[i].n); what = steps[i].what; }
+    if (!st) { sp_set_type(a, r->type, NULL); what = "initialize"; st = AudioUnitInitialize(a->mix); }
+    // Personalized HRTF (the listener's ear scan from the iPhone), where macOS has one: optional, its status only logged
+    OSStatus sh = st ? 0 : AudioUnitSetProperty(a->mix, kAudioUnitProperty_SpatialMixerPersonalizedHRTFMode, kAudioUnitScope_Global, 0, &hrtf, sizeof hrtf);
+    if (!st) { what = "output unit input format"; st = AudioUnitSetProperty(a->au, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &out, sizeof out); }
+    if (!st) { what = "connection to the output unit"; st = AudioUnitSetProperty(a->au, kAudioUnitProperty_MakeConnection, kAudioUnitScope_Input, 0, &conn, sizeof conn); }
+    if (st) {
+        LOG("[RED] audio #%d: the spatial mixer failed at %s (status %d): 5.1 is downmixed to stereo instead", a->id, what, (int)st);
+        AudioUnitUninitialize(a->mix); AudioComponentInstanceDispose(a->mix); a->mix = NULL;
+        return st;
+    }
+    UInt32 ht = 0, personal = 0, sz = sizeof ht;
+    AudioUnitGetProperty(a->mix, kAudioUnitProperty_SpatialMixerEnableHeadTracking, kAudioUnitScope_Global, 0, &ht, &sz); sz = sizeof personal;
+    AudioUnitGetProperty(a->mix, kAudioUnitProperty_SpatialMixerAnyInputIsUsingPersonalizedHRTF, kAudioUnitScope_Global, 0, &personal, &sz);
+    LOG("audio #%d 5.1 output: spatial audio for %s, \"%s\" (%u device channels): AUSpatialMixer ambience bed, head tracking %s, personalized HRTF %s (mode status %d)",
+        a->id, sp_type_name(r->type), r->name, r->dev_ch, ht ? "on" : "off", personal ? "in use" : "not in use", (int)sh);
+    return noErr;
+}
+// A route change (headphones in or out, AirPods connected, another default device, its speaker setup): the spatial mixer takes a new output type at once; a change between spatial and
+// discrete, or of the discrete map, makes the units again, which the watchdog does (the HAL's notification thread must not dispose the unit it is notifying about)
+static void au_route_changed(void *ctx, AudioUnit au, AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement el) {
+    aout *a = ctx;
+    if (el != 0 || !((id == kAudioOutputUnitProperty_CurrentDevice && scope == kAudioUnitScope_Global) || (id == kAudioUnitProperty_StreamFormat && scope == kAudioUnitScope_Output))) return;
+    route_t r; route_probe(au, &r);
+    if (r.route != a->route) {
+        if (!atomic_exchange(&a->rebuild, 1)) LOG("audio #%d: the output is now \"%s\" (%u channels): 5.1 goes %s, the units are made again", a->id, r.name, r.dev_ch, r.route == RT_DISCRETE ? "discrete" : "through spatial audio");
+    } else if (r.route == RT_SPATIAL && a->mix && r.type != atomic_load(&a->sp_type)) {
+        char why[160]; snprintf(why, sizeof why, ", \"%s\"", r.name);
+        sp_set_type(a, r.type, why);
+    } else if (r.route == RT_DISCRETE) {
+        SInt32 cur[MAP_MAX]; UInt32 sz = sizeof cur;
+        if (AudioUnitGetProperty(au, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Output, 0, cur, &sz) || sz != r.nmap * sizeof *cur || memcmp(cur, r.map, sz))
+            if (!atomic_exchange(&a->rebuild, 1)) LOG("audio #%d: the output is now \"%s\" (%u channels): a new 5.1 channel map, the units are made again", a->id, r.name, r.dev_ch);
+    }
+}
+#endif
+int dm_audio_surround(void);
+static void au_dispose(aout *a) {
 #if !TARGET_OS_IPHONE
     // Disposal clears CurrentDevice and notifies listeners. Remove them before the unit tears down its device.
-    AudioUnitRemovePropertyListenerWithUserData(au, kAudioOutputUnitProperty_CurrentDevice, au_device_changed, NULL);
-    AudioUnitRemovePropertyListenerWithUserData(au, kAudioUnitProperty_StreamFormat, au_device_changed, NULL);
+    AudioUnitRemovePropertyListenerWithUserData(a->au, kAudioOutputUnitProperty_CurrentDevice, au_device_changed, NULL);
+    AudioUnitRemovePropertyListenerWithUserData(a->au, kAudioUnitProperty_StreamFormat, au_device_changed, NULL);
+    if (a->route_listen) {
+        AudioUnitRemovePropertyListenerWithUserData(a->au, kAudioOutputUnitProperty_CurrentDevice, au_route_changed, a);
+        AudioUnitRemovePropertyListenerWithUserData(a->au, kAudioUnitProperty_StreamFormat, au_route_changed, a);
+        a->route_listen = 0;
+    }
 #endif
-    AudioUnitUninitialize(au); AudioComponentInstanceDispose(au);
+    AudioUnitUninitialize(a->au); AudioComponentInstanceDispose(a->au); a->au = NULL;
+    if (a->mix) { AudioUnitUninitialize(a->mix); AudioComponentInstanceDispose(a->mix); a->mix = NULL; }
 }
 static OSStatus au_create(aout *a) {
     AudioComponentDescription d = {.componentType = kAudioUnitType_Output,
@@ -224,25 +384,49 @@ static OSStatus au_create(aout *a) {
 #endif
                                    .componentManufacturer = kAudioUnitManufacturer_Apple};
     AudioComponent c = AudioComponentFindNext(NULL, &d);
-    a->au = NULL; if (!c || AudioComponentInstanceNew(c, &a->au)) { a->au = NULL; return -1; }
-    unsigned ch = (unsigned)device_channels(a);
-    AudioStreamBasicDescription f = {.mSampleRate = RATE, .mFormatID = kAudioFormatLinearPCM,
-                                     .mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
-                                     .mBytesPerPacket = 2u * ch, .mFramesPerPacket = 1, .mBytesPerFrame = 2u * ch,
-                                     .mChannelsPerFrame = ch, .mBitsPerChannel = 16};
-    AURenderCallbackStruct cb = {au_render, a};
+    a->au = NULL; a->mix = NULL; a->route = RT_STEREO; atomic_store(&a->rebuild, 0);
+    if (!c || AudioComponentInstanceNew(c, &a->au)) { a->au = NULL; return -1; }
 #if !TARGET_OS_IPHONE
+    route_t r = {0};
     const AudioUnitPropertyID props[] = {kAudioOutputUnitProperty_CurrentDevice, kAudioUnitProperty_StreamFormat};
     for (unsigned i = 0; i < sizeof props / sizeof *props; i++) {
         OSStatus st = AudioUnitAddPropertyListener(a->au, props[i], au_device_changed, NULL);
         if (st) LOG("[RED] audio: cannot listen for output property %u (status %d)", (unsigned)props[i], (int)st);
     }
     au_buffer(a->au, NULL);
+    if (a->ch == 6 && dm_audio_surround()) {
+        route_probe(a->au, &r);
+        if (r.route == RT_SPATIAL && sp_create(a, &r)) r.route = RT_STEREO;
+        a->route = r.route;
+        for (unsigned i = 0; i < sizeof props / sizeof *props; i++) {
+            OSStatus st = AudioUnitAddPropertyListener(a->au, props[i], au_route_changed, a);
+            if (st) LOG("[RED] audio #%d: cannot follow output route changes (property %u, status %d)", a->id, (unsigned)props[i], (int)st);
+        }
+        a->route_listen = 1;
+    }
 #endif
-    OSStatus st = AudioUnitSetProperty(a->au, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f, sizeof f);
-    if (!st) st = AudioUnitSetProperty(a->au, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof cb);
+    OSStatus st = noErr;
+    if (a->route != RT_SPATIAL) {
+        unsigned ch = (unsigned)device_channels(a);
+        AudioStreamBasicDescription f = {.mSampleRate = RATE, .mFormatID = kAudioFormatLinearPCM,
+                                         .mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
+                                         .mBytesPerPacket = 2u * ch, .mFramesPerPacket = 1, .mBytesPerFrame = 2u * ch,
+                                         .mChannelsPerFrame = ch, .mBitsPerChannel = 16};
+        AURenderCallbackStruct cb = {au_render, a};
+        st = AudioUnitSetProperty(a->au, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f, sizeof f);
+        if (!st) st = AudioUnitSetProperty(a->au, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof cb);
+#if !TARGET_OS_IPHONE
+        if (!st && a->route == RT_DISCRETE) {
+            // The device channel each of its channels plays: kAudioOutputUnitProperty_ChannelMap on the output scope holds, per device channel, the client channel it takes (-1: none)
+            st = AudioUnitSetProperty(a->au, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Output, 0, r.map, r.nmap * (UInt32)sizeof *r.map);
+            char m[MAP_MAX * 4] = ""; size_t o = 0;
+            for (UInt32 i = 0; i < r.nmap && o + 5 < sizeof m; i++) o += (size_t)snprintf(m + o, sizeof m - o, "%s%d", i ? " " : "", (int)r.map[i]);
+            LOG("%saudio #%d 5.1 output: discrete to \"%s\" (%u device channels, channel map %s; status %d)", st ? "[RED] " : "", a->id, r.name, r.dev_ch, m, (int)st);
+        } else if (!st && a->ch == 6 && a->route_listen) LOG("audio #%d 5.1 output: downmixed to stereo", a->id);
+#endif
+    }
     if (!st) st = AudioUnitInitialize(a->au);
-    if (st) { au_dispose(a->au); a->au = NULL; }
+    if (st) au_dispose(a);
     return st;
 }
 // OpenAudioOut runs on the game's thread, and creating the AudioUnit takes about 24 KB of stack (measured on the Mac: component lookup, instance, Initialize), more than some game threads have
@@ -278,19 +462,37 @@ static void au_halt(aout *a) {
     a->stalled = 0; a->retry_ms = 0; a->retry_at = 0;
 }
 static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 : TARGET_OS_IPHONE; }
+// The surround output (DM_AUDIO_SURROUND, the Mac settings window's Sound): `spatial` tells games 6 output channels (hle_audren.c) and plays six-channel outputs as 5.1 through Apple's
+// spatial audio or a 5.1 device; `stereo` keeps 2 and the downmix. Mac default: spatial with real output, stereo with the silent sink (replays and gate checks keep the stereo mix they were
+// recorded with). iOS keeps stereo: its route handling (AVAudioSession) has no spatial path yet
+int dm_audio_surround(void) {
+    static _Atomic int v = -1;
+    int r = atomic_load(&v); if (r >= 0) return r;
+    const char *e = getenv("DM_AUDIO_SURROUND");
+#if TARGET_OS_IPHONE
+    r = 0;
+#else
+    r = e && *e ? !strcmp(e, "spatial") : real_audio();
+    if (e && *e && strcmp(e, "spatial") && strcmp(e, "stereo")) LOG("[RED] DM_AUDIO_SURROUND=%s is neither spatial nor stereo: stereo", e);
+#endif
+    if (atomic_exchange(&v, r) < 0)
+        LOG("audio: surround output %s (%s): games are told %d output channels%s", r ? "spatial" : "stereo", e && *e ? "DM_AUDIO_SURROUND" : TARGET_OS_IPHONE ? "iOS" : real_audio() ? "default with real output" : "default with the silent sink",
+            r ? 6 : 2, r ? ", six-channel outputs play as 5.1 (spatial audio, or discrete on a 5.1 device)" : ", six-channel outputs are downmixed");
+    return r;
+}
 static void au_retry(aout *a, uint64_t now) {
     a->stalled = 1;
     a->retry_ms = a->retry_ms ? (a->retry_ms < 8000 ? a->retry_ms * 2 : 8000) : 1000;
     a->retry_at = now + (uint64_t)a->retry_ms * 1000000;
 }
 static void au_replace(aout *a) {
-    au_dispose(a->au);
+    au_dispose(a);
     OSStatus st = au_create(a);
-    if (st) LOG("[RED] audio #%d: no AudioUnit after the media services reset (status %d): this output stays silent", a->id, (int)st);
+    if (st) LOG("[RED] audio #%d: no AudioUnit after the media services reset or a route change (status %d): this output stays silent", a->id, (int)st);
     a->reset_pending = 0;
 }
 static void aout_free(aout *a) {
-    if (a->au) au_dispose(a->au);
+    if (a->au) au_dispose(a);
     dispatch_release(a->notify_sem);
     if (a->rel_sem) dispatch_release(a->rel_sem);
     pthread_mutex_destroy(&a->m); free(a);
@@ -324,6 +526,13 @@ static void au_request_start(aout *a) {
     if (!a->au || g_suspended || a->start_phase != AU_IDLE) return;
     a->start_phase = AU_STARTING;
     dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), a, au_start_device);
+}
+// Make an output's units again and restart it if it was playing (the media services reset, a 5.1 route change); under g_aos_lock, the silent sink standing in meanwhile
+static void au_rebuild(aout *a) {
+    au_halt(a);
+    if (a->backend == BK_NONE && atomic_load(&a->state) == STATE_STARTED) null_start(a);
+    if (a->start_phase == AU_CANCELED) a->reset_pending = 1;
+    else { au_replace(a); if (a->backend == BK_NULL) au_request_start(a); }
 }
 // Watchdog (real output only): an AudioUnit that is started while the app is in focus must keep calling back. iOS stops calling back without telling the AudioUnit when another audio session takes over
 // (Siri, an alarm, a call) or the media services reset; the output's buffers were then never released, and a game whose audio thread waits for them (Wwise's poll-only output, FMOD) stayed silent for good.
@@ -360,6 +569,8 @@ static void *au_watchdog(void *p) {
         uint64_t t = now_ns(), gap = t - last; last = t;
         for (int i = 0; i < AOMAX; i++) {
             aout *a = g_aos[i]; if (!a || !a->au) continue;
+            if (atomic_load(&a->rebuild) && a->start_phase != AU_STARTING && a->start_phase != AU_CANCELED) au_rebuild(a);   // a start in flight owns the unit: next tick
+            if (!a->au) continue;
             uint64_t n = atomic_load_explicit(&a->cb_n, memory_order_relaxed);
             if (a->start_phase == AU_WAIT_CALLBACK) {
                 if (n != a->wd_n) {
@@ -782,10 +993,7 @@ void dm_audio_reset(void) {
     pthread_mutex_lock(&g_aos_lock);
     for (int i = 0; i < AOMAX; i++) {
         aout *a = g_aos[i]; if (!a || !a->au) continue;
-        au_halt(a);
-        if (a->backend == BK_NONE && atomic_load(&a->state) == STATE_STARTED) null_start(a);
-        if (a->start_phase == AU_CANCELED) a->reset_pending = 1;
-        else { au_replace(a); if (a->backend == BK_NULL) au_request_start(a); }
+        au_rebuild(a);
     }
     LOG("audio outputs set up again after the media services reset");
     pthread_mutex_unlock(&g_aos_lock);

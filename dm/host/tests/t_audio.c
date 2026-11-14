@@ -65,6 +65,34 @@ static int test_surround_output(void) {
     puts("surround callback: all six channels audible, saturation and split-buffer release verified");
     return 0;
 }
+// The spatial route's callback (the AUSpatialMixer's input, Mac): the 5.1 guest buffer reaches the mixer as six float buffers in its order (FL FR C LFE BL BR, the MPEG 5.1 A layout the
+// mixer is told), each sample / 32768, across a buffer split; muted, the buffers are still consumed and the mixer gets silence
+static int test_spatial_input(void) {
+#if !TARGET_OS_IPHONE
+    enum { FRAMES = 300, SPLIT = 131 };
+    static int16_t in[FRAMES * 6]; static float out[6][FRAMES];
+    for (int f = 0; f < FRAMES; f++) for (int ch = 0; ch < 6; ch++) in[f * 6 + ch] = (int16_t)((ch + 1) * 1000 * (f & 1 ? -1 : 1));
+    for (int mute = 0; mute < 2; mute++) {
+        gbuf b[2] = {{in, SPLIT * 12, SPLIT * 12}, {in + SPLIT * 6, (FRAMES - SPLIT) * 12, (FRAMES - SPLIT) * 12}};
+        aout a = {.ch = 6, .route = RT_SPATIAL, .mute = mute};
+        atomic_init(&a.state, STATE_STARTED); atomic_init(&a.vol, 0x3f800000u);
+        a.q[0] = b; a.q[1] = b + 1; atomic_init(&a.q_tail, 2);
+        AudioBufferList *bl = calloc(1, offsetof(AudioBufferList, mBuffers) + 6 * sizeof(AudioBuffer));
+        bl->mNumberBuffers = 6;
+        for (int ch = 0; ch < 6; ch++) bl->mBuffers[ch] = (AudioBuffer){1, FRAMES * sizeof(float), out[ch]};
+        sp_render(&a, NULL, NULL, 0, FRAMES, bl);
+        free(bl);
+        for (int f = 0; f < FRAMES; f++) for (int ch = 0; ch < 6; ch++) {
+            float want = mute ? 0.f : in[f * 6 + ch] / 32768.f;
+            if (out[ch][f] != want) { printf("FAIL spatial input: mute %d frame %d channel %d expected %f got %f\n", mute, f, ch, want, out[ch][f]); return 1; }
+        }
+        if (atomic_load(&a.q_head) != 2 || atomic_load(&a.rel_tail) != 2 || a.pos) { puts("FAIL spatial input: guest buffer consumption / release"); return 1; }
+    }
+    if (device_channels(&(aout){.ch = 6, .route = RT_DISCRETE}) != 6 || device_channels(&(aout){.ch = 6}) != 2) { puts("FAIL spatial input: device channels per route"); return 1; }
+    puts("spatial input: 5.1 to six float buffers in layout order, mute and split-buffer release verified");
+#endif
+    return 0;
+}
 // The guest AudioOut's front as the SDK fills it (au_info), and its lifetime under a guard like the middleware's: open, play, go to the background, close only if the first word says open,
 // make the PCM inaccessible (a consumer left running would fault on it) and come back, 12 times (PR #109). Old pages stay mapped PROT_NONE, so no new buffer lands at a stale address
 static int test_output_lifetime(void) {
@@ -96,7 +124,7 @@ static int test_output_lifetime(void) {
     return 0;
 }
 int main(void) {
-    if (test_surround_output() || test_output_lifetime()) return 1;
+    if (test_surround_output() || test_spatial_input() || test_output_lifetime()) return 1;
     char out[64], ev[64]; uint8_t prm[16]; gbuf b[3]; static int16_t pcm[3][4800 * 2];
     h_au_InitParam(prm);
     if (h_au_Open(out, ev, NULL, prm)) return 1;
