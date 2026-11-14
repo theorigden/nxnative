@@ -167,6 +167,12 @@ def screen_shape(ctx):
     stub(0x3de5b8, '03901629', (None, 0xb9404a11, 0x34000131, 0x7110e09f, 0x540000e1, 0x711e007f, 0x540000a1, 0x2a1103e4, 0xb9406a11, 0x34000051, 0x2a1103e3,
                                 0x29169003),
          'window crop 1920x1080 → the host\'s output size')
+    # final image: main+0x8d760 sizes each agl::RenderDisplay (+0x7a8 / +0x7ac floats; main+0x144790 creates its colour / depth targets from them) as the display-mode
+    # object's slot i (+0x10 + i*0xc, int w, h; 1920x1080 docked) x its scale (+0x528 / +0x52c). The game composes the frame (3D result and HUD) there, and the last pass
+    # stretches it onto the window texture: a 1920x1080 slot becomes the output's size here. x12 is reloaded right after the site, x16 / x17 are free
+    stub(0x8d860, '8109422d', (0x2d420981, 0xf9400991, 0xd280f010, 0xf2c08710, 0xeb10023f, 0x54000101, None, 0xb9404a11, 0x340000b1, 0x1e270222, 0xb9406a11,
+                               0x34000051, 0x1e270221),
+         'final image (agl::RenderDisplay) 1920x1080 → the host\'s output size')
     # The layout objects' own 1280x720: each takes the layout height while its bit of state +0x54 is set (loader.c DM_SCREEN_ASPECT_SITES, all by default), so one build
     # can try them one by one (Breath of the Wild's taller_bit). The int pair in x24 and the float pair in x25 at main+0x2880b3c / main+0x2880b40 (the UI system's setup:
     # 1280x720 and 1280.0, 720.0), and the 1280x720 defaults of four objects (main+0x2880e34 +0x288, main+0xd47068 +0x310, main+0x6ee938 +0x1fc, main+0x8c3fe8: eight slots).
