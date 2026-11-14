@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <limits.h>
+#include <math.h>
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include "hle.h"
@@ -325,18 +326,39 @@ void dm_fps_state_apply(void) {
         if (r >= 1.3 && r < 1.77) { snprintf(autov, sizeof autov, "%.3f", r); as = autov; } else as = "0";
         LOG("%s: picture shape auto: the screen is %.3f:1 → %s", g_fps_mod, r, as);
     }
+    // Output size: DM_OUTPUT_RES=native (the pixels of the display the game opens on: a 16" MacBook Pro's 3456x2234, a 4K TV's 3840x2160) or <width>x<height> renders the
+    // builds whose stubs follow an output width too (profile output_size on: Tears of the Kingdom 1.4.3) at that width, in the screen shape's height (16:9 without one); the
+    // layout space stays 1280 wide. State +0x68 u32 output width (0 = 1920). 0 or unset: 1920 wide
+    uint32_t ow = 0;
+    const char *orv = getenv("DM_OUTPUT_RES");
+    if (orv && *orv && strcmp(orv, "0")) {
+        int pw = 0, ph = 0;
+        if (!DM_GAME_OUTPUT_SIZE) LOG("[RED] DM_OUTPUT_RES=%s: this game's profile has no output-size stubs (output_size); keeping 1920 wide", orv);
+        else if (!strcmp(orv, "native")) { extern int front_display_pixels(int *, int *) __attribute__((weak)); if (!front_display_pixels || !front_display_pixels(&pw, &ph)) LOG("[RED] DM_OUTPUT_RES=native: the display's size is not known; keeping 1920 wide"); }
+        else if (sscanf(orv, "%dx%d", &pw, &ph) != 2) LOG("[RED] DM_OUTPUT_RES=%s: native or <width>x<height>; keeping 1920 wide", orv);
+        if (pw >= 640 && pw <= 7680 && ph > 0) ow = (uint32_t)pw & ~1u;
+        else if (pw || ph) LOG("[RED] DM_OUTPUT_RES=%s: %dx%d is outside 640 to 7680 wide; keeping 1920 wide", orv, pw, ph);
+    }
+    float a = 0;   // the screen shape's width / height, 0 = 16:9
     if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9
-        char *end; float a = strtof(as, &end);
-        if (end == as || *end || !(a >= 1.3f && a < 1.77f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 1.77; keeping 16:9", as);
-        else {
-            uint32_t oh = (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48, lh = oh * 2 / 3; float lf = (float)lh;
+        char *end; a = strtof(as, &end);
+        if (end == as || *end || !(a >= 1.3f && a < 1.77f)) { LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 1.77; keeping 16:9", as); a = 0; }
+    }
+    if (a > 0 || ow) {
+        {
+            uint32_t oh, lh; float lf;
+            if (!ow) { oh = (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48; lh = oh * 2 / 3; lf = (float)lh; }   // 1920 wide: a multiple of 48 keeps the layout whole
+            else { float r = a > 0 ? a : 16.0f / 9.0f; oh = (uint32_t)((float)ow / r + 0.5f) & ~1u; lf = 1280.0f * (float)oh / (float)ow; lh = (uint32_t)(lf + 0.5f); if (a == 0) { lf = 720.0f; lh = 720; } }
+            if (a == 0) a = (float)(ow ? ow : 1920) / (float)oh;   // 16:9 at a larger size: the ratio below is 16:9, so the field of view and the HUD keep theirs
+            uint32_t w4 = ow; memcpy(dm_fps_state + 0x68, &w4, 4);
             memcpy(dm_fps_state + 0x48, &oh, 4); memcpy(dm_fps_state + 0x4c, &lh, 4); memcpy(dm_fps_state + 0x50, &lf, 4);
-            extern void mtl_present_screen(uint32_t w, uint32_t h); mtl_present_screen(1920, oh);   // the picture's shape for a texture that follows it (nvn_mtl.m present_shape)
+            extern void mtl_present_screen(uint32_t w, uint32_t h); mtl_present_screen(ow ? ow : 1920, oh);   // the picture's shape for a texture that follows it (nvn_mtl.m present_shape)
             const char *ms = getenv("DM_SCREEN_ASPECT_SITES"); uint32_t mask = ms ? (uint32_t)strtoul(ms, NULL, 0) : 0xffffffffu;   // the stubs of the game's own conversions, one bit each (+0x54)
             memcpy(dm_fps_state + 0x54, &mask, 4);
             if (ms) LOG("%s: screen shape: conversion sites %#x (DM_SCREEN_ASPECT_SITES)", g_fps_mod, mask);
             // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below (patches.py's sead::PerspectiveProjection stubs)
-            float r = 1920.0f / (float)oh, k = (16.0f / 9.0f) / r, tol = 0.01f;
+            float r = (float)(ow ? ow : 1920) / (float)oh, k = (16.0f / 9.0f) / r, tol = 0.01f;
+            if (fabsf(k - 1.0f) < 0.002f) { r = 0; k = 1; }   // 16:9: the views keep their angle (the stubs are off)
             const char *fo = getenv("DM_SCREEN_FOV"); if (fo && !strcmp(fo, "off")) tol = -1.0f;   // trials: the scene keeps the game's vertical angle (no view matches); the HUD camera still widens
             memcpy(dm_fps_state + 0x58, &r, 4); memcpy(dm_fps_state + 0x5c, &k, 4); memcpy(dm_fps_state + 0x60, &tol, 4);
             float wide = 16.0f / 9.0f, wtol = 0.001f, far = 10000.0f;   // the HUD camera's projection: 16:9, near 1, far 10000 (+0x74 / +0x78 / +0x7c)
@@ -349,12 +371,12 @@ void dm_fps_state_apply(void) {
             // matrices are computed. Only panes as wide and as tall as the screen are stretched: a width of 0 stretched the inventory's half-width side panel past its top
             // and bottom bars). DM_SCREEN_HUD=<edge>,<listed>,<full-screen width>,<full-screen height>[,<tallest>]
             // overrides them for trials
-            float anc[7] = {(float)lh / 2 - 360.0f, (float)lh / 720.0f, 280.0f, 100.0f, 1270.0f, 710.0f, 1300.0f};
+            float anc[7] = {lf / 2 - 360.0f, lf / 720.0f, 280.0f, 100.0f, 1270.0f, 710.0f, 1300.0f};
             const char *hv = getenv("DM_SCREEN_HUD");
             if (hv && sscanf(hv, "%f,%f,%f,%f,%f", &anc[2], &anc[3], &anc[4], &anc[5], &anc[6]) < 4) LOG("[RED] DM_SCREEN_HUD=%s: <edge>,<listed>,<full width>,<full height>[,<tallest>]; keeping the rest", hv);
             memcpy(dm_fps_state + 0x80, anc, sizeof anc);
             LOG("%s: screen shape: HUD moves out by %.0f (edge %.0f, listed widgets %.0f), panes %.0fx%.0f or larger stretched %.3f", g_fps_mod, anc[0], anc[2], anc[3], anc[4], anc[5], anc[1]);
-            LOG("%s: screen shape %.3f: output 1920x%u, layout 1280x%u (DM_SCREEN_ASPECT; only builds with screen-shape stubs follow it)", g_fps_mod, a, oh, lh);
+            LOG("%s: screen shape %.3f: output %ux%u, layout 1280x%.1f (DM_SCREEN_ASPECT, DM_OUTPUT_RES; only builds with screen-shape stubs follow it)", g_fps_mod, a, ow ? ow : 1920, oh, lf);
         }
     }
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);

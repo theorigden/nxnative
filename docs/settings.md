@@ -83,6 +83,10 @@ iPhone and iPad. **Fit**, the default, shows the game's picture (16:9, or the ta
 
 Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **Match screen**, the default, renders the shape of the screen: an iPad's 4:3, an iPhone's or a MacBook's taller-than-16:9 screen; a 16:9 screen keeps 16:9. On a MacBook with a camera housing, fullscreen then fills the strip beside the housing too, and the game keeps its HUD below it. **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
 
+### Resolution
+
+Games whose profile supports it (Tears of the Kingdom). **Screen's native**, the default, renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)** renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate.
+
 ### Frame-rate counter
 
 Shows the frames per second at the top left.
@@ -271,6 +275,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Cloud saves folder (Mac) | `DM_SAVE_SYNC` | a folder; `icloud`: iCloud Drive › nxnative Saves; `0`: off |
 | Picture (iPhone and iPad) | `DM_PICTURE_FIT` | `fit` 16:9 with black bars, `fill` covers the screen, cropped |
 | Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is taller than 16:9 (iPad 4:3, iPhone Duo 1.43:1), else 16:9; on a Mac the shape of the screen the game opens on (a MacBook Pro's 1.55:1, past its camera housing in fullscreen), 16:9 on a 16:9 display; `1.43` the iPhone Duo's shape, `0` 16:9 |
+| Resolution | `DM_OUTPUT_RES` | `native` the pixel size of the screen the game opens on, `0` 1920 wide (the docked Switch's) |
 | Frame-rate counter | `DM_SHOW_FPS` | `1`, `0` |
 | Touch feedback | `DM_TOUCH_HAPTICS` | `1`, `0` |
 | Game rumble | `DM_RUMBLE` | `1`, `0` |

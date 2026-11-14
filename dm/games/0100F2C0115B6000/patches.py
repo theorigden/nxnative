@@ -132,6 +132,79 @@ def frame_step(ctx):
         emit(w)
     emit(B(here(), 0xd5d84))
     fs_put(0xd5d80, [B(0xd5d80, start)], 'dynamic resolution only at render scale 1.0')
+    screen_shape(ctx)
+
+# Screen shape: a screen taller than 16:9 (a MacBook's 1.55:1, an iPad's 4:3; DM_SCREEN_ASPECT) gets a picture of its own shape, and a larger output (state +0x68 output
+# width, 0 = 1920) a picture of that size. nnMain stores the display size, 1920x1080 (main+0xbdb578 / main+0xbdb584, stored at main+0xbdb588), which the framework takes
+# for the logical frame buffer's physical size and the window textures, and passes (1280.0, 720.0) (main+0xbdb6a0) for its virtual (layout) size. The 3D views follow the
+# frame buffer's width only (main+0xd5c24 x one uniform scale), so a taller output gives taller views (1600x1040 docked at 1.55:1). The presented picture is chosen by
+# nvnWindowSetCrop from the display object's request (main+0x3de5a8 writes it: +0xac x, y, +0xb4 w, h), which the display-mode object fills with 1920x1080 docked: a
+# docked crop of 1920x1080 becomes the output's size. Handheld (1280x720) keeps its crop: the screen shape is for docked mode. x16 is free in nnMain; main+0x3de5b8 is in a leaf.
+# The field of view and the HUD's projection: sead::PerspectiveProjection is laid out as in Breath of the Wild 1.9.0 and its setFovy_, constructor, set() and doUpdateMatrix
+# match it instruction for instruction at the sites, so its stub bodies are used as they are (01007EF00011E000/patches.py, which describes them; state +0x58.. and the
+# ring of fovys at +0xfc..). The HUD at the taller edges: duo_anchor.c from nn::ui2d::Pane::Calculate (main+0x593110)
+_duo_anchor = 'bd4000201e20200854000041d65f03c0f9400c08b4ffffc852800609aa0803eaf9400d4bb400008baa0b03ea7100052954ffff81bd40554152a88f491e2701221e2220201e2e10011e2f10021e21ac41bd4070022d4a14031e2208641e2288621e2020881e244c44bd4084031e2308a21e2388a51e2020481e224ca5f94014099100800abd4010221e2208221e222080540003cbbd4014261e2608261e2620a05400034bbd4018261e2608261e2620a0540002c8bd407c061e20c0c652a8440b1e2701671e2708271e2720c0540001e5bd408c061e20c0d01e27220054000165eb0a013f54fff941f9400008f9407108eb02011f54fff8c0bd400420bd4080011e2108001400001ceb0a013f540004c1bd4014261e2608261e2620a05400044b52a886891e2701261e260826bd4004271e3010101f0740c61e2620a054000345bd408c061e20c0d052a844091e2701311e3108311e31220054000265f9400009f9407129eb02013f540001e0bd4080001e2008e0bd008000bd4004201e200860bd008400bd400420bd4088011e210800bd008800bd4004201e2008c0bd008c00d65f03c01e222080540000abbd4014231e2308231e2320a054fff2aaf9400009f940712952a8500a1e2701431e230823eb02013f540000811e2320801e2354a854fff1645280060914000004aa0a03e87100052954000440f9400d0ab400034abd4071042d4a19051e2408a71e2488a41e2020e81e274c84bd4085051e2508c71e2588c51e2020e81e274ca51e222080540000abbd4014261e2608261e2620a054fffd6af9400108f9407108eb02011f54ffede11e2320801e2354a854fffc8417ffff6b2d460d021e2308631f020c421e2a10031e23204054ffecacbd408c021e20c043bd4008241e2408241e24206054ffebebbc5e40231e2028041e2420606f00e4041e2444641e24cc631e2338031e2140001e2020481e20cc601e2008201e202840bd008c00d65f03c0'
+_duo_calc = 0x0
+_pane_draw_self = 0x10d7f98   # nn::ui2d::Pane::DrawSelf (vtable main+0x357f280 slot 28, empty)
+TANF, ATANF = 0x2bb7470, 0x2bb7480   # PLT
+def _bl(frm, to): return 0x94000000 | (((to - frm) >> 2) & 0x3FFFFFF)
+def screen_shape(ctx):
+    here, emit, fs_site, fs_put, STATE = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
+    def stub(site, orig, body, why):
+        fs_site(site, orig)
+        start = here()
+        for w in body:
+            emit(ADRP(16, here(), STATE) if w is None else w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], why)
+    # display size: x8 = 1920 | 1080 << 32 → the host's height (+0x48) and width (+0x68) where set
+    stub(0xbdb584, '0887c0f2', (0xf2c08708, None, 0xb9404a10, 0x34000050, 0xb3607e08, None, 0xb9406a10, 0x34000050, 0xb3407e08),
+         'display size 1920x1080 (window textures, frame buffer) → the host\'s output size')
+    # layout size: x8 = 1280.0 | 720.0 << 32 → the host's layout height (+0x50, float)
+    stub(0xbdb6a0, '8886e8f2', (0xf2e88688, None, 0xb9405210, 0x34000050, 0xb3607e08),
+         'layout size 1280x720 → the host\'s layout height')
+    # crop request: a 1920x1080 crop becomes the output's size
+    stub(0x3de5b8, '03901629', (None, 0xb9404a11, 0x34000131, 0x7110e09f, 0x540000e1, 0x711e007f, 0x540000a1, 0x2a1103e4, 0xb9406a11, 0x34000051, 0x2a1103e3,
+                                0x29169003),
+         'window crop 1920x1080 → the host\'s output size')
+    FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
+                0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
+                'half_to_s0', 'tanf', None, 0xbd405e01, 0x1e210800, 'atanf', 's0_to_half', 0x1e202800, 0xbd00a260,
+                None, 0xb940fe0b, 0x1200156c, 0x1100056b, 0xb900fe0b, 0x9104020a, 0xbc2c5940, 'half_to_s0')
+    def fov_stub(site, orig, aspect_word, half_to_s0, s0_to_half):
+        fs_site(site, orig)
+        start = here()
+        for w in FOV_BODY:
+            if w is None: emit(ADRP(16, here(), STATE))
+            elif w == 'tanf': emit(_bl(here(), TANF))
+            elif w == 'atanf': emit(_bl(here(), ATANF))
+            else: emit({'ratio': aspect_word, 'half_to_s0': half_to_s0, 's0_to_half': s0_to_half}.get(w, w))
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'sead::PerspectiveProjection fovy widened for a view of the screen\'s ratio (more above and below, 16:9 sides), stored widened')
+    fov_stub(0x27d53f8, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)   # setFovy_: ratio at [x19,#0xb0], half in s8
+    fov_stub(0xc02694, '0041201e', 0xbd40b262, 0x1e204100, 0x1e204008)    # constructor: the same
+    fov_stub(0xd4275c, '2041201e', 0x1e204102, 0x1e204120, 0x1e204009)    # set(): ratio in s8 (stored after), half in s9
+    stub(0x27d5444, '0188552d', (0x2d558801, None,
+         0xbd405a10, 0x1e202208, 0x54000320, 0xbd407611, 0x1e313851, 0x1e20c231, 0xbd407a12, 0x1e322220, 0x5400026a,
+         0x2d534811, 0x1e2e1013, 0x1e332220, 0x540001e1, 0xbd407e13, 0x1e332240, 0x54000181,
+         0x1e204202,
+         0xb940a009, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x540000a0, 0x7100056b, 0x54ffff81,
+         0xbd405e11, 0x1e310821),
+         'PerspectiveProjection matrix: the HUD camera (16:9, near 1, far 10000) takes the screen\'s ratio and a widened vertical angle')
+    # duo_calc(pane, state + 0x80, Pane::DrawSelf) after the global matrix, while the output's height is set. x0..x18 are dead at the site (x19 the pane)
+    code = here()
+    for i in range(0, len(_duo_anchor), 8): emit(int(_duo_anchor[i:i + 8], 16))
+    fs_site(0x593110, '68624139')
+    start = here(); emit(ADRP(16, here(), STATE))
+    emit(0xb9404a11)   # ldr w17, [x16, #0x48]   the output's height (0 = 16:9)
+    emit(0x340000d1)   # cbz w17, orig (+6)
+    emit(0xaa1303e0)   # mov x0, x19
+    emit(0x91020201)   # add x1, x16, #0x80
+    emit(ADRP(2, here(), _pane_draw_self)); emit(0x91000042 | ((_pane_draw_self & 0xFFF) << 10))
+    emit(_bl(here(), code + _duo_calc))
+    emit(0x39416268)   # orig: ldrb w8, [x19, #0x58]
+    emit(B(here(), 0x593114))
+    fs_put(0x593110, [B(0x593110, start)], 'nn::ui2d::Pane::Calculate after the global matrix: duo_calc (the HUD at the taller screen\'s edges, below a camera housing\'s row)')
 
 FRAME_STEP = {'277178b7dba1b6d4949a84778d4abc58': frame_step}
 
@@ -140,5 +213,8 @@ FRAME_STEP = {'277178b7dba1b6d4949a84778d4abc58': frame_step}
 BINDING = [
     {'what': '60 fps frame step and render scale', 'now': 'build', 'goal': 'game', 'purpose': 'frame rate',
      'why': "the game's own timing object",
+     'blocked': 'frame-step stubs have no function-matched form yet'},
+    {'what': 'screen shape and output size', 'now': 'build', 'goal': 'game', 'purpose': 'rendering',
+     'why': "the display size, layout size and crop in nnMain and the display object, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate",
      'blocked': 'frame-step stubs have no function-matched form yet'},
 ]
