@@ -85,7 +85,7 @@ Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizo
 
 ### Resolution
 
-Games whose profile supports it (Tears of the Kingdom). **Screen's native**, the default, renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)** renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate.
+Games whose profile supports it (Tears of the Kingdom). **Screen's native** renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)**, the default, renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate.
 
 ### Frame-rate counter
 
