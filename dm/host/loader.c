@@ -316,7 +316,16 @@ void dm_fps_state_apply(void) {
     // (Breath of the Wild 1.9.0's patches.py) render that shape: the output keeps its width (1920) and takes the height that gives the ratio, a multiple of 48 so the
     // 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 its float; 0 = 16:9
     const char *as = getenv("DM_SCREEN_ASPECT");
-    if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9; auto: the iOS front end resolves it to the screen's shape (a Mac window has none)
+    // auto: the screen's own shape. The iOS front end resolves it before the game starts (its window); on the Mac front_screen_aspect_auto gives the shape of the screen the
+    // window opens on, its whole frame with a camera housing's row (fullscreen covers it: fs_whole_enter), 16:9 when it is outside 1.3 to 1.77 (a 16:9 display such as the Pro Display XDR)
+    char autov[16];
+    if (as && !strcmp(as, "auto")) {
+        extern double front_screen_aspect_auto(void) __attribute__((weak));
+        double r = front_screen_aspect_auto ? front_screen_aspect_auto() : 0;
+        if (r >= 1.3 && r < 1.77) { snprintf(autov, sizeof autov, "%.3f", r); as = autov; } else as = "0";
+        LOG("%s: picture shape auto: the screen is %.3f:1 → %s", g_fps_mod, r, as);
+    }
+    if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9
         char *end; float a = strtof(as, &end);
         if (end == as || *end || !(a >= 1.3f && a < 1.77f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 1.77; keeping 16:9", as);
         else {

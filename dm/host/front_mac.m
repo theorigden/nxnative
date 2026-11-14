@@ -123,8 +123,9 @@ void front_screen_match(int fps) {
 // 1728x1084 of the screen's 1728x1117 points, even when -window:willUseFullScreenContentSize: or -constrainFrameRect:toScreen: ask for the whole screen, and the row
 // beside the housing stays black. On such a screen the window instead goes borderless over the whole screen, the menu bar and the Dock hiding until the pointer
 // reaches them, as in macOS's own fullscreen (DM_FULLSCREEN_NOTCH=0 keeps macOS's own). The green button, ⌃⌘F and DM_FULLSCREEN all reach it through
-// -toggleFullScreen: (DmGameWindow). Nothing of the picture is drawn behind the housing: DmGameView fits it to the whole screen when the black bars around it are at
-// least as tall as the housing's row (a 16:9 game on the 16:10 screen), and below the row otherwise.
+// -toggleFullScreen: (DmGameWindow). A picture of the screen's own shape (DM_SCREEN_ASPECT=auto on a profile with screen_aspect) fills the whole screen, the row beside
+// the housing too, and the game keeps its HUD below that row (state +0x64, hud_inset_update). Any other picture is not drawn behind the housing: DmGameView fits it to
+// the whole screen when the black bars around it are at least as tall as the housing's row (a 16:9 game on the 16:10 screen), and below the row otherwise.
 static NSRect g_fs_saved; static NSWindowStyleMask g_fs_saved_style;   // the window's frame and style before, which leaving puts back
 static int fs_whole_wanted(NSScreen *s) {   // fullscreen on this screen covers the whole of it: it has a housing, and DM_FULLSCREEN_NOTCH is not 0
     static int off = -1; if (off < 0) { const char *e = getenv("DM_FULLSCREEN_NOTCH"); off = e && !strcmp(e, "0"); }
@@ -517,13 +518,34 @@ void front_picture_shape(int w, int h) {
     g_picture_aspect = (double)w / h;
     if (g_layer) dispatch_async(dispatch_get_main_queue(), ^{ NSView *v = g_win.contentView; if ([v isKindOfClass:DmGameView.class]) [(DmGameView *)v fitDrawable]; });   // the area it is fitted to may change
 }
+// The Mac's DM_SCREEN_ASPECT=auto (loader.c): the width / height of the screen the window opens on, its whole frame (a camera housing's row included: fullscreen covers it).
+// Called on the main thread before the window is up
+double front_screen_aspect_auto(void) {
+    @autoreleasepool { NSScreen *s = NSScreen.mainScreen ?: NSScreen.screens.firstObject; if (!s || s.frame.size.height <= 0) return 0; return s.frame.size.width / s.frame.size.height; }
+}
+extern uint8_t *dm_fps_state;   // loader.c: the frame step state page of a game with one
+// The picture fills the whole view, a camera housing's row included: over the whole screen (fs_whole_enter) with the screen's own shape (within 1%, as the present fills it)
+static int picture_fills_screen(NSRect b) {
+    return g_fs_whole && b.size.height > 0 && fabs(b.size.width / b.size.height / g_picture_aspect - 1) < 0.01;
+}
+// The HUD's top inset (state +0x64, float, layout units; read by the game's HUD anchoring, duo_anchor.c, each frame): the housing's row in the game's layout space while the
+// picture fills it, 0 otherwise. The layout height is +0x4c (0 = 16:9: no screen shape, nothing to write)
+static void hud_inset_update(NSView *v) {
+    if (!dm_fps_state) return;
+    uint32_t lh; memcpy(&lh, dm_fps_state + 0x4c, 4); if (!lh) return;
+    NSRect b = v.bounds; CGFloat top = v.window.screen.safeAreaInsets.top;
+    float in = picture_fills_screen(b) && top > 0 ? (float)(top / b.size.height * lh) : 0.0f, was; memcpy(&was, dm_fps_state + 0x64, 4);
+    if (in == was) return;
+    memcpy(dm_fps_state + 0x64, &in, 4);
+    LOG("front end: HUD top inset %.1f of the layout's %u (the camera housing's row of %.0f points)", in, lh, in > 0 ? top : 0);
+}
 @implementation DmGameView
 // The part of the view the present fits the picture into: all of it, but over the whole screen of a Mac with a camera housing (fs_whole_enter) only the part below the
 // housing's row when the picture fitted to all of it would reach into that row. The drawable is that part's size and the layer keeps it at its bottom (kCAGravityBottom);
 // the row above it shows the layer's black background
 - (NSRect)pictureArea {
     NSRect b = self.bounds; CGFloat top = g_fs_whole ? self.window.screen.safeAreaInsets.top : 0;
-    if (top <= 0 || b.size.width <= 0 || b.size.height <= top) return b;
+    if (top <= 0 || b.size.width <= 0 || b.size.height <= top || picture_fills_screen(b)) return b;   // a picture of the screen's shape fills the housing's row too
     double fitted = fmin(b.size.height, b.size.width / g_picture_aspect);
     if ((b.size.height - fitted) / 2 >= top) return b;   // the bar above the picture covers the housing's row
     b.size.height -= top; return b;   // AppKit's origin is at the bottom left: the row is at the top
@@ -544,6 +566,7 @@ void front_picture_shape(int w, int h) {
 // scaled down to it and up again by the compositor
 - (void)fitDrawable {
     CAMetalLayer *l = (CAMetalLayer *)self.layer; if (![l isKindOfClass:CAMetalLayer.class] || !self.window) return;
+    hud_inset_update(self);
     l.contentsScale = self.window.backingScaleFactor;
     NSSize px = [self convertSizeToBacking:self.pictureArea.size]; if (px.width < 1 || px.height < 1 || CGSizeEqualToSize(l.drawableSize, px)) return;
     l.drawableSize = px; LOG("front end: drawable %.0fx%.0f", px.width, px.height);
@@ -1441,6 +1464,8 @@ void front_run(void (*guest)(void)) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         NSRect r = NSMakeRect(0, 0, 1280, 720);
+        uint32_t oh = 0; if (dm_fps_state) memcpy(&oh, dm_fps_state + 0x48, 4);
+        if (oh) r.size.height = round(1280.0 * oh / 1920);   // a screen shape (DM_SCREEN_ASPECT): the window starts in it
         NSWindow *win = [[DmGameWindow alloc] initWithContentRect:r
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
