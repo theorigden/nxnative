@@ -405,6 +405,19 @@ class Prune(Base):
         self.assertEqual(self.blobs(), before - 1)   # D2's source; its library's bytes stay under metallib/
         self.assertEqual(self.store.get('metallib/mac/m.metallib'), b'L' + D2.encode())
 
+    def test_metal_libraries_the_build_did_not_use_go(self):   # dmsh_mtlcache's entries after a chain change: the listed, the newer, those a per-shader entry names and the other target's stay
+        now = time.time()
+        put = lambda n, data, when=now - 100: self.store.put(f'metallib/{n}.metallib', data, when)
+        put('mac/used', b'U'); put('mac/old', b'O' * 300); put('mac/old_x', b'X' * 50); put('mac/new', b'N', now + 100); put('ios/old', b'I')
+        put('mac/restored', b'L' + D1.encode()); self.shader(D1, now - 100)   # a whole shader the build restored takes its library from shader/, never naming it to the Metal cache
+        put('mac/twin', b'O' * 300, now - 100)   # another MSL that compiled to the same bytes as a library that goes, and is kept: its bytes stay
+        self.store.put('metallib/filled.json', b'{}')
+        self.assertEqual(self.store.prune_metallibs({'mac'}, {'metallib/mac/used.metallib', 'metallib/mac/twin.metallib'}, now), (2, 50))
+        self.assertEqual(sorted(self.store.names('metallib/')), ['metallib/ios/old.metallib', 'metallib/mac/new.metallib', 'metallib/mac/restored.metallib',
+                                                                 'metallib/mac/twin.metallib', 'metallib/mac/used.metallib'])   # filled.json too: a later fill may add what went
+        self.assertEqual(self.store.get('metallib/mac/twin.metallib'), b'O' * 300)
+        self.assertEqual(self.store.prune_metallibs({'mac'}, set(), now - 1000), (0, 0))   # all written after since
+
     def test_the_file_gives_back_its_pages(self):
         now = time.time()
         for i in range(40): self.store.put(f'shader/{i:064x}/mac/k_b.metal', os.urandom(100000), now - 100)

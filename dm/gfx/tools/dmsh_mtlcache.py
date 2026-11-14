@@ -7,6 +7,8 @@
 # the compiler's identity (metal / metallib --version without the install path, the SDK version and build) and the MSL bytes.
 # Filling from earlier builds: every imported library must record the current compiler identity and flags in its reflection. Legacy libraries without that identity are not imported.
 # A fresh compile of two shaders per stage also checks their bytes. Each folder is read once per compiler identity (filled.json remembers its number of libraries).
+# Bounded by the NSP script: a full build lists the entries it compiled or reused (used_list, _b_mtl.txt beside its Mac outputs), and after it succeeds the others of the targets it built go
+# (shader_cache.Store.prune_metallibs), so each chain change leaves no more than the libraries of the MSL it changed, and those only until the next full build.
 # Not part of the chain version (dmsh_chain.py): the cache never changes an output, it only skips recompiling one. Change FORMAT when what it stores changes.
 import os, re, sys, json, shutil, ctypes, hashlib, threading, subprocess, collections
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'tools'))
@@ -36,6 +38,7 @@ class Cache:
         self.store, self.targets, self.work = store, targets, work
         self.ident = {t: hashlib.sha256(FORMAT + b'\0' + rec.encode() + b'\0' + compiler_id(sdk).encode()).digest() for t, (sdk, rec, _) in targets.items()}
         self.stats, self.lock = collections.Counter(), threading.Lock()
+        self.used = collections.Counter()   # the entries this build compiled or reused ({path: 1}; a Counter, so a worker process's come back with the other counters): written by a full build (used_list), kept by the NSP script's prune
 
     def path(self, target, src):
         d = hashlib.sha256(self.ident[target] + b'\0' + src).hexdigest()
@@ -47,6 +50,15 @@ class Cache:
     def count(self, what, n=1):
         with self.lock: self.stats[what] += n
 
+    def use(self, *paths):
+        with self.lock: self.used.update({p: 1 for p in paths})
+
+    def used_list(self, targets):
+        """The text of a full build's list of the entries it used (dmsh_build.py writes it as _b_mtl.txt beside its Mac outputs): a first line naming the targets it built, then one name a line.
+        A shader restored whole from the per-shader cache takes its libraries from there, not through here; those entries share their bytes with that cache's, which the prune keeps.
+        targets: those the build compiled for (an iPhone-only build still has the Mac target, which it never asks for), whose other entries the prune may remove"""
+        return '# targets ' + ' '.join(sorted(targets)) + '\n' + ''.join(p + '\n' for p in sorted(self.used))
+
     def _compile(self, target, msl, lib):
         air = os.path.join(self.work, f'mtlcache-{target}-{os.getpid()}-{threading.get_ident()}.air')
         try: self.targets[target][2](msl, air, lib)
@@ -55,7 +67,7 @@ class Cache:
 
     def compile(self, target, msl, lib):
         """msl → lib for target: a clone of the library that the same source compiled to before, or a compile (then kept). Raises CalledProcessError as the compile does"""
-        p = self.path(target, open(msl, 'rb').read())
+        p = self.path(target, open(msl, 'rb').read()); self.use(p)
         if self.store.to_file(p, lib): self.count((target, 'reused')); return
         tmp = f'{lib}.tmp-{os.getpid()}-{threading.get_ident()}'
         self._compile(target, msl, tmp)
@@ -67,7 +79,7 @@ class Cache:
         kept, not the whole library, so an output stays a clone as compile's are). The pieces are cached by their place (<digest>.metallib, <digest>_x.metallib, <digest>_x2.metallib):
         one source always splits the same way. Raises CalledProcessError as the compile does, and what split raises"""
         p = self.path(target, open(msl, 'rb').read())
-        paths = [p] + [f'{p[:-len(".metallib")]}_x{i if i > 1 else ""}.metallib' for i in range(1, len(libs))]
+        paths = [p] + [f'{p[:-len(".metallib")]}_x{i if i > 1 else ""}.metallib' for i in range(1, len(libs))]; self.use(*paths)
         if all(self.store.has(x) for x in paths):
             for src, dst in zip(paths, libs): self.store.to_file(src, dst)
             self.count((target, 'reused')); return

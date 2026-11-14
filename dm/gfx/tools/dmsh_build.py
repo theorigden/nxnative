@@ -122,6 +122,7 @@ def pair_keyed(digest, pixel_digests):   # a vertex shader's key with its pixel 
 def cache_meta_path(key): return f'index/{key}.json'
 def cache_path(digest): return f'shader/{digest}'
 CAS_USED = '_b_cas.txt'   # in the Mac library directory b-<V>/: the cache_path digests of its last full build, one per line
+MTL_USED = '_b_mtl.txt'   # beside it: the Metal compile cache entries (metallib/) that build compiled or reused (dmsh_mtlcache.Cache.used_list), which the NSP script's prune keeps
 
 # A finished shader's outputs are staged in the cache, under a name of this output folder's, and leave the disk (commit); the image is written from them at the end (publish_library).
 # A stopped build leaves them there, and the next build of this folder clears them first: its shaders come back from the cache entries publish_cache wrote
@@ -1008,9 +1009,12 @@ def fin(key, wb):
             for e in it:
                 if e.name.startswith((key, 'job1_' + key)) and e.is_file(): os.unlink(e.path)
         finished()
+def metal_counts():   # the Metal libraries reused from and compiled into the compile cache so far, every target (a worker's arrive with its batch's results); list() takes the items in one step, as another thread may add some
+    counts = list(MTL.stats.items())
+    return {'metal_reused': sum(v for (_, w), v in counts if w == 'reused'), 'metal_compiled': sum(v for (_, w), v in counts if w == 'compiled')}
 def finished(*_):   # one more shader finished, for the progress
     with _prog['lock']: DONE['n'] += 1; n = DONE['n']
-    progress('compiling', n, len(keys), cached=len(cache_hits), misses=NMISS)
+    progress('compiling', n, len(keys), cached=len(cache_hits), misses=NMISS, **metal_counts())
 # The shaders are finished in worker processes (PROCS of them): fin's own Python, the rules that rewrite the MSL above all, holds the GIL, and with threads one core ran it for all of them
 # while the Metal compiles they waited on ran at about a third of the machine (Ocarina of Time, 16 cores: 104% CPU for this process, 4-5 cores busy in all). A worker is a fork of this
 # process, made before any thread starts, so it has every table and fingerprint read above; spawn would run this script again, its start removing the outputs. A worker does not open
@@ -1019,7 +1023,7 @@ def finished(*_):   # one more shader finished, for the progress
 # in the batch's order, so the results, the summary and every file written are those of the threads (DMSH_PROCS=0). The precompiled Metal headers (dmsh_pch.py) are made here before the
 # fork: a worker would make its own (three compiles for each target in each worker) in a folder that nothing removes, as a worker process ends without atexit. A worker that dies
 # (killed, out of memory) stops the build with one line
-COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats)
+COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats, MTL.used)
 def worker_start():
     global PROGRESS, STORE
     assert SERVED is not None
@@ -1138,6 +1142,8 @@ if not want:   # a full build: the stamp, then the c1 guard and uniform read ext
     # every full build writes them, and the iOS folder goes whole into the IPA. Before the stamp, so a stamped folder always has its list
     with open(os.path.join(out, CAS_USED + '.tmp'), 'w') as _f: _f.write(''.join(d + '\n' for d in sorted(set(digests.values()))))
     os.replace(os.path.join(out, CAS_USED + '.tmp'), os.path.join(out, CAS_USED))
+    with open(os.path.join(out, MTL_USED + '.tmp'), 'w') as _f: _f.write(MTL.used_list(TARGETS))
+    os.replace(os.path.join(out, MTL_USED + '.tmp'), os.path.join(out, MTL_USED))
     for _d in [out] + ([IOSOUT] if IOSOUT else []): dmsh_chain.write_stamp(_d, GAME.id, INPUTS)
     print(f'library stamp: game {GAME.id}, inputs {INPUTS}', flush=True)
 # The libraries' images, from what this build staged (and for a partial build the images it builds on): the folders go, and what reads a library from here on reads the image

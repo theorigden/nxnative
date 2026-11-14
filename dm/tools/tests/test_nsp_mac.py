@@ -24,6 +24,7 @@ class Base(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.tmp)
         self.sh, self.logs, self.ran = self.tmp / 'shader', self.tmp / 'logs', []
         self.cas_used = [LIVE]   # the cache entries a full dmsh_build.py run lists as used
+        self.mtl_used = None   # the Metal compile cache entries it lists as used (None: a build from before that list)
         self.logs.mkdir()
         for cm in (mock.patch.object(nsp, 'PROG', mock.Mock()), mock.patch.object(nsp, 'say', lambda m: None), mock.patch.object(nsp, 'run', self.fake_run)):
             cm.__enter__(); self.addCleanup(cm.__exit__, None, None, None)
@@ -44,6 +45,7 @@ class Base(unittest.TestCase):
                 target = 'mac' if o == self.sh / 'cache' else 'ios'
                 if target in targets: (d / 'k_b.metallib').write_bytes(b'lib')
                 if target == 'mac': (d / 'k_b.metal').write_text('MSL'); (d / 'k_b.json').write_text('{}'); (d / '_b_cas.txt').write_text(''.join(x + '\n' for x in self.cas_used))
+                if target == 'mac' and self.mtl_used is not None: (d / '_b_mtl.txt').write_text(f'# targets {" ".join(sorted(targets))}\n' + ''.join(x + '\n' for x in self.mtl_used))
                 (o / f'b-{CHAIN}' / 'inputs.tsv').write_text(f'# stamp\ngame\t0100535012974000\ninputs\t{INPUTS}\n')
             for n in ('c1_full.tsv', 'cb_extent.tsv'): (self.tmp / n).write_text(f'# chain b-{CHAIN} inputs {INPUTS} 2026-10-23T00:00:00+00:00\n')
             log.write_text('shaders 1: ok 1\n')
@@ -283,6 +285,21 @@ class Nvn(Base):
         with mock.patch.object(nsp, 'say', said.append): self.build(False)
         self.assertEqual(self.ran, []); self.assertNotIn(OLD, self.entries()); self.assertIn(NEW, self.entries())
 
+    def test_prune_metal_cache(self):   # after a chain change: the libraries the build did not use go for its targets (an iPhone build: ios); the listed, one a kept shader entry names and the Mac's stay
+        s = self.store()
+        for n, data in (('ios/used', b'U'), ('ios/old', b'O' * 2000), ('mac/old', b'M')): s.put(f'metallib/{n}.metallib', data, 0)
+        s.close(); self.cas(LIVE)   # its library's bytes (l * 1000) are also under metallib/ios/restored
+        s = self.store(); s.put('metallib/ios/restored.metallib', b'l' * 1000, 0); s.close()
+        self.mtl_used, said = ['metallib/ios/used.metallib'], []
+        with mock.patch.object(nsp, 'say', said.append): self.build(False)
+        self.assertEqual(sorted(self.store().names('metallib/')), ['metallib/ios/restored.metallib', 'metallib/ios/used.metallib', 'metallib/mac/old.metallib'])
+        self.assertEqual([m for m in said if 'Metal compile cache' in m], ['removed old Metal compile cache libraries: 1 (2.0 KB)'])
+
+    def test_prune_metal_cache_needs_the_list(self):   # libraries from before the list: every Metal library stays
+        s = self.store(); s.put('metallib/mac/old.metallib', b'O', 0); s.close()
+        self.build(False)
+        self.assertEqual(self.store().names('metallib/'), {'metallib/mac/old.metallib'})
+
     def test_prune_shader_cache_needs_success_and_the_list(self):   # a failed build, or libraries from before the list, keep every entry
         self.build(False); self.cas(OLD)
         (self.sh / 'ios' / f'b-{CHAIN}.key').unlink()   # not reused: the step runs, and fails
@@ -325,7 +342,9 @@ class Nvn(Base):
         p.write_text('{"step": "cache check", "done": 3, "total": 10, "cached": 2}')
         self.assertEqual(watch(), {'step': 'cache check', 'done': 3, 'total': 10, 'unit': 'shaders', 'note': '2 cached'})
         p.write_text('{"step": "compiling", "done": 7, "total": 10, "cached": 6, "misses": 4}')
-        self.assertEqual(watch(), {'step': 'compiling', 'done': 7, 'total': 10, 'unit': 'shaders', 'note': '4 not cached'})
+        self.assertEqual(watch(), {'step': 'compiling', 'done': 7, 'total': 10, 'unit': 'shaders', 'note': '4 translated'})
+        p.write_text('{"step": "compiling", "done": 7, "total": 10, "cached": 6, "misses": 4, "metal_reused": 3, "metal_compiled": 1200}')   # translated again, most compiles taken from the Metal cache
+        self.assertEqual(watch(), {'step': 'compiling', 'done': 7, 'total': 10, 'unit': 'shaders', 'note': '4 translated, Metal: 3 reused, 1,200 compiled'})
         p.write_text('{"step": "comp')   # half written: no progress this time, not an error
         self.assertIsNone(watch())
 

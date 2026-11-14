@@ -198,6 +198,23 @@ class Store(_Files):
         self._run('PRAGMA incremental_vacuum')
         return len(gone), sum(size.get(d, 0) for d in gone)
 
+    def prune_metallibs(self, targets, keep, since):
+        """Remove the Metal compile cache's libraries (metallib/<target>/, dmsh_mtlcache.py) of the given targets that are not in keep, were written before since and whose bytes no entry
+        outside metallib/ names (a per-shader entry's library, which a build restores without asking the Metal cache), and the bytes nothing names any more, giving their pages back. The
+        other targets' libraries and every other name stay. The record of earlier builds' folders read into the cache (metallib/filled.json) goes with any removal, so a later fill may add
+        them again. Returns (libraries removed, the bytes given back)"""
+        rows = self._run("SELECT e.name, e.blob, e.mtime, length(b.data) FROM entry e JOIN blob b ON b.id=e.blob WHERE e.name>='metallib/' AND e.name<'metallib0'")
+        named = {b for b, in self._run("SELECT DISTINCT blob FROM entry WHERE name<'metallib/' OR name>='metallib0'")}
+        gone = {name: (blob, n) for name, blob, mtime, n in rows
+                if name.endswith('.metallib') and name.split('/')[1] in targets and name not in keep and mtime < since and blob not in named}
+        if not gone: return 0, 0
+        left = {blob for name, blob, _, _ in rows if name not in gone}
+        with self.lock, self.batch():
+            self.db.executemany('DELETE FROM entry WHERE name=?', [(name,) for name in gone] + [('metallib/filled.json',)])
+            self.db.execute('DELETE FROM blob WHERE id NOT IN (SELECT blob FROM entry)')
+        self._run('PRAGMA incremental_vacuum')
+        return len(gone), sum({blob: n for blob, n in gone.values() if blob not in left}.values())
+
     def delete_prefix(self, prefix):
         """Remove every entry whose name starts with prefix, and the bytes nothing names any more, giving their pages back (dmsh_build.py's staged outputs once its image is written)"""
         with self.lock:

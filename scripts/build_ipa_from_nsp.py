@@ -2327,7 +2327,8 @@ class ShaderWatch:
         cached, misses = p.get('cached', 0), p.get('misses')
         if p.get('step') == 'cache check':
             return {'step': 'cache check', 'done': p['done'], 'total': p['total'], 'unit': 'shaders', 'note': f'{cached:,} cached'}
-        return {'step': 'compiling', 'done': p.get('done', 0), 'total': p.get('total', 0), 'unit': 'shaders', 'note': f'{misses:,} not cached' if misses else ''}
+        metal = (f', Metal: {p["metal_reused"]:,} reused, {p["metal_compiled"]:,} compiled' if 'metal_reused' in p else '') if misses else ''   # libraries, every target; a translated shader may have several
+        return {'step': 'compiling', 'done': p.get('done', 0), 'total': p.get('total', 0), 'unit': 'shaders', 'note': f'{misses:,} translated{metal}' if misses else ''}
 
 
 def spirv_cross(repo, env=None):   # resolve the same selection the shader tools run, including an executable name on PATH
@@ -2376,7 +2377,16 @@ def prune_shader_cache(sh, chain):
     except OSError: return 0
     if not shader_cache.exists(sh / 'cache/cas.db'): return 0
     store = shader_cache.Store(sh / 'cache/cas.db', say)
-    try: n, size = store.prune_shaders(keep, since)
+    try:
+        n, size = store.prune_shaders(keep, since)
+        # The Metal compile cache (metallib/) is keyed by the MSL, so a chain change reuses every library whose MSL it left as it was, and adds one for each it changed. The libraries the
+        # current build did not use are removed for the targets it built (the list beside _b_cas.txt; its first line names them), after the per-shader entries, whose libraries stay:
+        # what a build restores whole from there is not in the list. No list (a build from before it): nothing goes
+        try: mtl = (shader_lib.view(sh / 'cache' / f'b-{chain}') / '_b_mtl.txt').read_text().splitlines()
+        except OSError: mtl = []
+        if mtl and mtl[0].startswith('# targets '):
+            nm, msize = store.prune_metallibs(set(mtl[0].split()[2:]), set(mtl[1:]), since)
+            if nm: say(f'removed old Metal compile cache libraries: {nm:,} ({amount(msize, "B")})')
     finally: store.close()
     if n: say(f'removed old shader cache entries: {n:,} ({amount(size, "B")})')
     return n
@@ -2481,7 +2491,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False, se
         reason, old, new, n = stale
         PROG.event('shaders_stale', reason=reason, old=old, new=new, count=n)
         say(f'[NOTE] cached shader libraries cannot be reused ({old} -> {new}): ' + ('the translation chain changed' if reason == 'chain' else 'the game profile\'s shader inputs changed')
-            + f'; {n:,} base libraries scheduled (including cache restores; later builds reuse as before)')
+            + f'; {n:,} base libraries scheduled: every shader is translated again, and Metal compiles only those whose Metal source changed (the rest come from the Metal compile cache)')
     if mac and not seen and g.table('shader_seen.tsv').is_file():
         say(f'building the whole shader map, {len(shader_keys(g)):,} shaders: hours for a large one the first time. --seen-shaders builds only the {len(seen_listed(g)):,} the profile\'s playtests used, in minutes; areas they do not cover then draw incomplete')
     if not seen:   # the run's folder replaces the library: a stopped build keeps no old shaders under the same chain, as dmsh_build.py removes a folder's
