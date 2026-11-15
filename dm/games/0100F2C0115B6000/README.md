@@ -62,6 +62,15 @@ The host draws the game's tone map and can show it in HDR on the Mac ([Tone map 
 - **Current: HDR verified only through a screen without EDR.** The test Mac has no EDR screen, so `DM_HDR_HEADROOM=4` took its screen as one with headroom 4: the layer was RGBA16Float in extended linear sRGB, the expansion armed, the final image was copied and presented, and the drawable read back (`DM_HDR_PROBE`) held values up to 4.1-4.3 (the torch), 0.01-0.04 % of its pixels above SDR white, with the HUD and the middle tones as in SDR (a screenshot of the copy, encoded to SDR, at present 5000). Not yet seen on an XDR or HDR screen; the launcher's HDR stays off by default until it is.
 - **Open:** the tone map's pass draws its picture divided by the headroom in HDR, so agl's FXAA works on a darker picture and its absolute edge threshold skips a little more in the darks. Menus that bypass EASU (the paused map, the inventory) were not checked: the expansion arms only after EASU drew in the last two frames, so they fall back to SDR.
 
+## Upscaling
+
+The game scales its 3D picture (the render scale's size) to its output with FSR 1's EASU, which MetalFX can draw instead ([A game's FSR 1 EASU drawn by MetalFX](../../../docs/reference/rendering.md#a-games-fsr-1-easu-drawn-by-metalfx); profile keys `upscaler_easu`, `upscaler_default`).
+
+- **The pass:** EASU (`ac58fc18eda5f387`) reads agl's FXAA output (`22a61cb1ec732aef`, which runs after the tone map, so FXAA works on the HDR-divided picture as before) and clamps to [0, 3.5]. At render scale 0.67 docked it scales 1072x600 into the 1920x1080 final image; the scene target is exactly the render size, so MetalFX reads it straight.
+- **Current: `auto` by default (Theo's choice, 2026-11-15).** MetalFX while `DM_RENDER_SCALE` (frame step state +0x10, also when changed in game) is below 1, the game's EASU at 1, where the game's own dynamic resolution may still scale (1600x900 docked into 1920x1080) and the picture stays the game's bit for bit. `game` and `metalfx` override it.
+- **Current: verified on the Mac (M1 Max, windowed, the cave route).** At 0.67 MetalFX draws every EASU draw, the picture upright and in the game's colours; at 1.0 `auto` keeps the game's draw. GPU time (`DM_UPSCALER=ab DM_AB=300`, a still scene): p50 10.8-11.3 ms with EASU, 10.8-11.5 ms with MetalFX, about 0.3 ms more a frame. HDR with simulated headroom 4: MetalFX takes the input multiplied by 4 and values above SDR white reach the drawable; MetalFX overshot to 7.5-13 at the torch's flame before its result was held to the input's range.
+- **Open:** a side-by-side picture comparison of one scene (the route's timing moved Link between runs) and an HDR game run with the bounded draw back; an EDR screen; iOS.
+
 ## Screen shape
 
 `DM_SCREEN_ASPECT` (profile `screen_aspect on`, `output_size on`): the stubs of `screen_shape()` in [`patches.py`](patches.py) give the game an output of the screen's shape, and [`duo_anchor.c`](duo_anchor.c) moves the HUD to the taller screen's edges and stretches full-screen panes (Breath of the Wild's rule, [its note](../01007EF00011E000/README.md)).
@@ -103,6 +112,7 @@ The host draws the game's tone map and can show it in HDR on the Mac ([Tone map 
 
 ## Found on this game
 
+- [A game's FSR 1 EASU drawn by MetalFX](../../../docs/reference/rendering.md#a-games-fsr-1-easu-drawn-by-metalfx) (2026-11-15): MetalFX scales the 3D picture into the final image below 100 % render scale, HDR included
 - [Tone map and HDR by the host](../../../docs/reference/rendering.md#tone-map-and-hdr-by-the-host) (2026-11-15): the host draws agl's tone map with AgX, ACES or the game's curve, and HDR on the Mac
 - [Mac fullscreen below a camera housing](../../../docs/reference/rendering.md#mac-fullscreen-below-a-camera-housing) (2026-11-07): fullscreen on a 16-inch MacBook Pro now covers the whole screen, the first step toward a picture of the screen's own shape. Checked with a front-end harness; not yet in the game.
 - [5.1 output through Apple's spatial audio](../../../docs/reference/audio.md#51-output-through-apples-spatial-audio-dm_audio_surround) (2026-11-14): the game mixes FL FR C LFE RL RR when told 6 output channels; the Mac now tells it 6 and spatializes the bed. Open: not yet heard in the game (rear and centre placement, AirPods head tracking).

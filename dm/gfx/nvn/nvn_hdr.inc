@@ -33,7 +33,7 @@ static id<MTLLibrary> tm_host_lib(NSDictionary *j) {
     static const char *want[] = {"c1", "cbuf", "tex", "samp_tex", "tex", "samp_tex", "samp_tex", "samp_tex", "border"};
     NSArray *b = j[@"bindings"]; int ok = [b isKindOfClass:NSArray.class] && b.count == 9 && [j[@"entry"] isEqual:@"main0"];
     for (NSUInteger i = 0; ok && i < 9; i++) ok = [b[i][@"arg_id"] intValue] == (int)i && [b[i][@"kind"] isEqual:@(want[i])];
-    if (!ok) { RED_ONCE(176, "tone map: shader %s does not have agl's tone map interface (two textures, uniform buffer 0): the game's shader draws it", [j[@"key"] UTF8String]); return nil; }
+    if (!ok) { RED_ONCE(173, "tone map: shader %s does not have agl's tone map interface (two textures, uniform buffer 0): the game's shader draws it", [j[@"key"] UTF8String]); return nil; }
     NSError *e = nil; id<MTLLibrary> lib = host_lib("tonemap_agl", &e);
     if (!lib) MLOG("[RED] tone map: the host's library did not load (%s): the game's shader draws it", e.localizedDescription.UTF8String);
     return lib;
