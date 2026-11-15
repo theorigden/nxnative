@@ -147,7 +147,6 @@ struct LauncherView: View {
                 Spacer()
             }
             .padding([.horizontal, .top], 20)
-            ScrollViewReader { scroll in
             Form {
                 settingSections(basic: true)
                 CloudSavesSection()
@@ -165,8 +164,6 @@ struct LauncherView: View {
                 }
             }
             .formStyle(.grouped)
-            .onChange(of: m.focus) { _, f in if let f { withAnimation { scroll.scrollTo(f) } } }   // a controller's selection stays in view
-            }
             .onScrollGeometryChange(for: CGFloat.self) {
                 $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom - $0.containerSize.height
             } action: { _, extraHeight in

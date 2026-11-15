@@ -95,6 +95,19 @@ final class GameSettings {
     private func select(_ s: Setting) {
         if !s.basic && !UserDefaults.standard.bool(forKey: "window.advanced") { UserDefaults.standard.set(true, forKey: "window.advanced") }   // LauncherView's @AppStorage opens it
         model.focus = s.env
+        let rows = order, i = rows.firstIndex { $0.env == s.env } ?? 0, n = rows.count
+        DispatchQueue.main.async { [weak self] in self?.reveal(Double(i) / Double(max(1, n - 1))) }   // once the form has laid out the opened section
+    }
+    // Keeps the selection in view: the form's scroll view moved to the same fraction of its height as the row is of the rows (rows differ in height, so it is close,
+    // not exact). ScrollViewReader's scrollTo did not move the grouped form on macOS
+    private func reveal(_ frac: Double) {
+        func scrolls(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrolls) }
+        guard let v = view, let sv = scrolls(v).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }), let doc = sv.documentView else { return }
+        let visible = sv.contentView.bounds.height, h = doc.frame.height
+        guard h > visible else { return }
+        let y = (h - visible) * frac
+        sv.contentView.scroll(to: NSPoint(x: 0, y: doc.isFlipped ? y : h - visible - y))
+        sv.reflectScrolledClipView(sv.contentView)
     }
 
     // A controller or the arrow keys: 0 up, 1 down, 2 left, 3 right (the previous or next value), 4 A (a toggle flips, a choice takes its next value), 5 B (closes)
