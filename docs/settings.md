@@ -99,7 +99,7 @@ Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizo
 
 ### Resolution
 
-Games whose profile supports it (Tears of the Kingdom). **Screen's native** renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)**, the default, renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate.
+Games whose profile supports it (Tears of the Kingdom). **Screen's native**, the default, renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)** renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate.
 
 ### Frame-rate counter
 
@@ -255,7 +255,7 @@ On a MacBook with a notch, fullscreen is macOS's own: the picture sits below the
 
 ### HDR
 
-Games whose profile supports it (Tears of the Kingdom). **Off** by default. On, a screen with HDR (a MacBook Pro's XDR display, a Pro Display XDR, an HDR monitor or TV) shows the bright parts of the picture, the sun, fire, lights and reflections, above the white of the rest of the screen, up to what the screen can show at its current brightness (more at lower brightness). The HUD, menus and text stay at the screen's normal white. Moving the window to a screen without HDR switches it back to the normal picture. Works with each [Tone map](#tone-map). In an `env.txt`: `DM_HDR=1`, and `DM_GRADE_PEAK=<n>` caps the brightest value at n times the normal white.
+Games whose profile supports it (Tears of the Kingdom). **On** by default, which is automatic: a screen with HDR (a MacBook Pro's XDR display, a Pro Display XDR, an HDR monitor or TV) shows the bright parts of the picture, the sun, fire, lights and reflections, above the white of the rest of the screen, up to what the screen can show at its current brightness (more at lower brightness). The HUD, menus and text stay at the screen's normal white. Moving the window to a screen without HDR switches it back to the normal picture. Works with each [Tone map](#tone-map). In an `env.txt`: `DM_HDR=1`, and `DM_GRADE_PEAK=<n>` caps the brightest value at n times the normal white.
 
 ### Switch 2 controllers
 
