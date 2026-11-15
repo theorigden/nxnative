@@ -3,7 +3,7 @@
 // window, so the window keeps the keyboard and the game its focus: the game keeps running, and a change to the picture shows on its next frame. While it is open the game gets no
 // input (front_mac.m holds it); a controller moves through the rows (dm_settings_panel_nav).
 // A choice is saved as the launcher saves it (launcher.<VAR> in the app's preferences, only when it differs from the tested default), so the next start has it. A setting the
-// running game takes at once (front_setting_live: front_mac.m for HDR, the Metal HUD and the display mode, settings_live.c for the tone map, the grade, the frame rate,
+// running game takes at once (front_setting_live: front_mac.m for HDR, the Metal HUD and the display mode, settings_live.c for the tone map, the grade, the frame rate, upscaling,
 // the render scale and rumble) is applied as it changes; the others say "Applies at next start", and Restart Game starts the game again through the launcher
 // (front_settings_restart, launcher.c) when there is one. The list is the app's Resources/dm/launcher.json, else the file DM_SETTINGS_LIST names (a host run outside an app);
 // DM_SETTINGS_DOMAIN keeps the choices in that preferences domain instead of the app's (a test run)

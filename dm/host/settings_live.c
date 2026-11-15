@@ -12,6 +12,7 @@ __attribute__((weak)) void mtl_grade_get(dm_grade *g);
 __attribute__((weak)) void mtl_grade_set(const dm_grade *g);
 __attribute__((weak)) void dm_haptics_apple_levels(float gain, float min);   // haptics_apple.m
 __attribute__((weak)) float dm_render_scale_limit(void);                    // loader.c
+__attribute__((weak)) int mtl_present_upscale_set(int on);                  // nvn_mtl.m
 extern __attribute__((weak)) uint8_t *dm_fps_state;                         // loader.c: the frame step state page, NULL for a game without one
 
 static int num(const char *v, float lo, float hi, float *out) {   // a number from lo to hi, as the launcher's ranges (no hex, no NaN)
@@ -64,6 +65,12 @@ int settings_live_apply(const char *env, const char *value) {
         if (!num(value, 0.5f, hi, &x)) return 0;
         __atomic_store((uint32_t *)(dm_fps_state + 0x10), (uint32_t *)&x, __ATOMIC_RELAXED);
         ok = 1;
+    } else if (!strcmp(env, "DM_PRESENT_UPSCALE")) {   // the present's scaler, chosen at each present (nvn_mtl.m fx_encode)
+        if (!mtl_present_upscale_set) return 0;
+        if (!value) return 1;
+        int on = !strcmp(value, "metalfx");
+        if (!on && strcmp(value, "off")) return 0;
+        ok = mtl_present_upscale_set(on);
     } else if (!strcmp(env, "DM_RUMBLE")) {
         if (!value) return 1;
         if (strcmp(value, "0") && strcmp(value, "1")) return 0;

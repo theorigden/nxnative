@@ -1,7 +1,7 @@
 // Quit with the Home button (Mac front end, front_mac.m; LNPANDY/NX2Apple#336). Holding Home (the logo button on Xbox and PlayStation pads) for HQ_HOLD_S seconds opens a
 // "Quit?" prompt over the game: A quits (the same exit as ⌘Q), B or a new press of Home closes it. Letting go of Home before the time is up does nothing. A and B are
 // GameController's buttonA and buttonB (by label: the bottom button on an Xbox or PlayStation pad, the one printed A on a Nintendo pad), not the Switch buttons the game
-// gets. A short press (let go before the hold indicator shows, HQ_RING_S) is a tap: the front end opens its settings panel with it (hq_take_tap; settings_menu_mac.h).
+// gets. A short press (let go before the hold indicator shows, HQ_RING_S) is a tap: the front end opens its settings panel with it (hq_take_tap; front_mac.m, dm/mac/GameSettings.swift).
 // Pure, so tests/t_home_quit.c checks it without a controller or a window.
 //
 // The hold works wherever the press reaches the host: pad_keep_system_buttons claims Home on every pad (preferredSystemGestureState = GCSystemGestureStateDisabled), and
