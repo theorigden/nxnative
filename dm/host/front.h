@@ -23,6 +23,9 @@ int front_display_pixels(int *w, int *h);
 int front_display_panel_pixels(int *w, int *h);
 // Whether the window's current screen mode supports variable refresh (Mac front_mac.m; none on iOS). Any thread
 int front_screen_variable_refresh(void);
+// HDR (DM_HDR=1, Mac): the EDR headroom of the window's screen (its brightest value over SDR white, which changes with the brightness) while the game layer is set up for EDR
+// (RGBA16Float, extended linear sRGB); 0 when it is not (HDR off, a screen without EDR). nvn_mtl.m's tone map maps to it and the present writes linear values (nvn_hdr.inc). Any thread
+float front_edr_headroom(void);
 // The frame rate the display link paces the game at (60, 30, 120; nvn_mtl.m link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
 // to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m; none on iOS). Called from the present thread
 void front_screen_match(int fps);
