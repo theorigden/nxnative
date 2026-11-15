@@ -17,6 +17,8 @@ SCHEMA = 1   # launcher.json's version (docs/launcher.schema.json); it grows onl
 META = {
     'level': r'basic',                       # a setting a front end shows first; without it, the front end decides
     'needs': r'DM_[A-Z0-9_]+=[^;=]+',        # <VAR>=<value>: a sub-setting, drawn only while the row that sets <VAR> has that value
+    'unit': r'[^;=]{1,8}',                   # a range shown as its value with this unit (+0.5 EV) instead of a percentage
+    'zero': r'[^;=]+',                       # a range's label for 0 (HDR peak: the screen's own)
 }
 
 

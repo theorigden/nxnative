@@ -10,6 +10,8 @@
 // Before the host starts, the settings window (dm/mac/Launcher.swift dm_mac_launcher, linked in by pack_app.py) runs in this process and puts the player's settings into the environment; it keeps
 // what the launch environment and the env files set (DM_ENV_LAUNCH_KEYS, DM_ENV_FILE_KEYS). DM_LAUNCHER=0 or --no-launcher (open <app> --args --no-launcher) starts the game without the window,
 // with the saved choices; so does "Show this window at launch" turned off.
+// Restart Game in the settings window over the game (dm/mac/GameSettings.swift) ends the host with exit code 75: the launcher then starts it again with the choices saved now
+// (relaunch_env), without the window. DM_LAUNCHER_RESTART tells the host that it can.
 #include <CoreFoundation/CoreFoundation.h>
 #include <ctype.h>
 #include <errno.h>
@@ -134,6 +136,24 @@ static void saved_choices(void) {   // after the env files, before the bundle's 
     }
 }
 
+static int in_list(const char *list, const char *k) {   // a name in a space-separated list
+    size_t n = strlen(k);
+    for (const char *s = list; s && *s; ) { const char *e = strchr(s, ' '); size_t m = e ? (size_t)(e - s) : strlen(s); if (m == n && !strncmp(s, k, n)) return 1; s = e ? e + 1 : s + m; }
+    return 0;
+}
+// Before a restart (exit code 75): every setting the launch environment and the env files did not set goes back to the saved choices, which the settings window over the
+// game has just written, then the bundle's language default as at the first start. The cloud save's choice was for the first start only
+static void relaunch_env(const char *lang) {
+    CFArrayRef rules = setting_rules(); const char *fk = getenv("DM_ENV_FILE_KEYS"), *lk = getenv("DM_ENV_LAUNCH_KEYS");
+    for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) {
+        char env[128]; if (!rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env)) continue;
+        if (!in_list(fk, env) && !in_list(lk, env)) unsetenv(env);
+    }
+    unsetenv("DM_SAVE_SYNC_CHOICE");
+    saved_choices();
+    if (*lang) setenv("DM_LANG", lang, 0);
+}
+
 // Cloud saves: the folder chosen in the settings window (Launcher.swift CloudSavesSection, cloudSaves.folder in the app's preferences) becomes DM_SAVE_SYNC
 // (dm/host/save_sync.h), with or without the window; a DM_SAVE_SYNC the launch environment or an env file set wins. A front end may write the key too (docs/frontends.md, The cloud saves folder)
 static void cloud_saves_folder(void) {
@@ -221,13 +241,19 @@ int main(int argc, char **argv) {
     sigemptyset(&sa.sa_mask);
     sigaction(SIGTERM, &sa, NULL); sigaction(SIGINT, &sa, NULL); sigaction(SIGHUP, &sa, NULL);
     char *host_argv[] = {host, dm, NULL};
-    int err = posix_spawn(&g_child, host, NULL, NULL, host_argv, environ);
-    if (err) { fprintf(stderr, "[RED] launcher: cannot start %s: %s\n", host, strerror(err)); return 1; }
+    setenv("DM_LAUNCHER_RESTART", "1", 1);
     int status;
-    while (waitpid(g_child, &status, 0) < 0) if (errno != EINTR) return 1;
-    // Cloud saves (DM_SAVE_SYNC, dm/host/save_sync.h): what the host committed and had not sent yet goes now, after a crash too (the committed save is whole whatever the host was doing)
-    // DM_SAVE as the host had it: an env file or the launch environment may have set another folder than this app's own
-    if (!save_sync_after_exit(getenv("DM_SAVE"), id)) fprintf(stderr, "launcher: the save did not reach the cloud; it goes at the next start\n");
+    for (;;) {
+        int err = posix_spawn(&g_child, host, NULL, NULL, host_argv, environ);
+        if (err) { fprintf(stderr, "[RED] launcher: cannot start %s: %s\n", host, strerror(err)); return 1; }
+        while (waitpid(g_child, &status, 0) < 0) if (errno != EINTR) return 1;
+        // Cloud saves (DM_SAVE_SYNC, dm/host/save_sync.h): what the host committed and had not sent yet goes now, after a crash too (the committed save is whole whatever the host was doing)
+        // DM_SAVE as the host had it: an env file or the launch environment may have set another folder than this app's own
+        if (!save_sync_after_exit(getenv("DM_SAVE"), id)) fprintf(stderr, "launcher: the save did not reach the cloud; it goes at the next start\n");
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 75) break;
+        fprintf(stderr, "launcher: Restart Game: starting the host again with the saved choices\n");
+        relaunch_env(lang);
+    }
     if (WIFSIGNALED(status)) { fprintf(stderr, "launcher: the host stopped on signal %d\n", WTERMSIG(status)); return 128 + WTERMSIG(status); }
     fprintf(stderr, "launcher: the host exited with %d\n", WEXITSTATUS(status));
     return WEXITSTATUS(status);

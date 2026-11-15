@@ -221,6 +221,8 @@ void hid_keys_init(void) {
 // DM_CTL=<file> (Mac, for driving a game step by step from a shell): the host reads the lines appended to the file (polled every 100 ms) and acts on each at once:
 //   "key[+key][~hold]" presses as a DM_KEYS step does (hold 0.15 s by default), "shot <path>" saves the next presented frame as a PNG (dm_gfx_shot_at), "passdump <n>" dumps the
 //   render passes of the next n frames as DM_NVN_PASSDUMP does (to stderr, the run's log), "texdump <path with %d>" saves the colour targets of the next frame as DM_NVN_TEXDUMP does,
+//   "menu open" / "menu close" / "menu toggle" works the Mac's settings window over the game, "menunav <0-5>" moves in it as a controller does (up, down, left, right, A, B), "menushot <path>" saves it as drawn, and
+//   "set <VAR>=<value>" makes a choice there, applied at once when the running game takes it and saved as the window saves it (front_mac.m front_settings_ctl, GameSettings.swift),
 //   "env KEY=VALUE" sets a switch read at the time of use (DM_NVN_SNAPRAW for the next texdump), "cvarf <main offset> <value>" sets an Unreal float console variable
 //   (hle_fpslock.c dm_ctl_cvar_f32; "cvari" an int one), "peek <address> <count>" logs that many floats of guest memory, "memdump <address> <bytes> <path>" saves guest memory
 //   to a file (a buffer texture's storage, which the pass dump's tbuf lines print, holds what the GPU wrote: buffer textures are views of the pool), "texlist <NVN target>" logs the
@@ -230,6 +232,7 @@ void hid_keys_init(void) {
 //   points over that time and lifts it (the touch screen's pans and swipes, hle_touch.c gesture_sample), "dump" logs what each guest thread waits on and the graphics wait points
 //   (crash_dump_now, as the iOS app's DM_LOG_PORT dump; scripts/regress.py asks for it before stopping a hung game), "program <n>" makes oe::ExecuteProgram(n) with no parameters (a multi-program application's way between its programs, headless), "webshot <path>" saves the offline page shown as a PNG, "#…" is ignored.
 //   Look at a screen, decide, press, look again: menus whose timing moves from run to run (loading) need no blind timed script
+__attribute__((weak)) void front_settings_ctl(const char *l) { LOG("[RED] DM_CTL: %s: no settings window in this host", l); }   // front_mac.m's; none without the Mac front end
 static void *ctl_main(void *arg) {
     const char *path = arg; long off = 0; char line[1100];
     if (getenv("DM_PREV_PROGRAM") || getenv("DM_RELAUNCH")) {   // oe::ExecuteProgram or oe::RequestToRelaunchApplication started this program in the last one's place: that program acted on what the file holds
@@ -260,6 +263,7 @@ static void *ctl_main(void *arg) {
                                                      while (*e3 == ' ') e3++; dm_ctl_memdump(a, n, e3); continue; }
                 if (!strncmp(line, "cvari ", 6)) { void dm_ctl_cvar_i32(uint64_t off, int32_t v); char *e2; uint64_t off = strtoull(line + 6, &e2, 16); dm_ctl_cvar_i32(off, (int32_t)strtol(e2, NULL, 0)); continue; }
                 if (!strncmp(line, "cvarf ", 6)) { void dm_ctl_cvar_f32(uint64_t off, float v); char *e2; uint64_t off = strtoull(line + 6, &e2, 16); dm_ctl_cvar_f32(off, strtof(e2, NULL)); continue; }
+                if (!strncmp(line, "menu", 4) || !strncmp(line, "set ", 4)) { LOG("DM_CTL: %s", line); front_settings_ctl(line); continue; }   // the Mac's settings window
                 if (!strncmp(line, "env ", 4)) { char *eq = strchr(line + 4, '='); if (eq) { *eq = 0; setenv(line + 4, eq + 1, 1); LOG("DM_CTL: env %s=%s", line + 4, eq + 1);
                                                      if (!strncmp(line + 4, "DM_IMU_", 7) || !strcmp(line + 4, "DM_SIX_DELAY")) { void imu_env_reread(void); imu_env_reread(); } } continue; }   // the IMU's switches are read again
                 if (!strncmp(line, "texdump ", 8)) { void dm_gfx_texdump_next(const char *path); dm_gfx_texdump_next(line + 8); LOG("DM_CTL: colour targets of the next frame → %s (as DM_NVN_TEXDUMP)", line + 8); continue; }

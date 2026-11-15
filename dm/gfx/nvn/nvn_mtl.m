@@ -2767,7 +2767,7 @@ void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); snap_dra
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[176];   // one past the highest key: a new key raises this, and the macro refuses to compile otherwise
+static int g_red_once[177];   // one past the highest key: a new key raises this, and the macro refuses to compile otherwise
 #define RED_ONCE(k, ...) do { _Static_assert((k) < sizeof g_red_once / sizeof *g_red_once, "a RED_ONCE key past g_red_once: raise its size"); if (!g_red_once[k]++) MLOG("[RED] " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
 // and the host's own vertex functions read no vertex buffers. 13 Sentinels uses stream 15, and the old 16 + stream went out of range (Metal assertion: buffer index (31) must be < 31)
@@ -16182,6 +16182,14 @@ static int fx_mode(void) {
     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
     MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
     return g_fx_mode = v;
+}
+// Upscaling switched while the game runs (settings_live.c, the Mac settings window over the game): the present thread reads the mode at each present (fx_encode), makes the
+// scaler when it first needs one and leaves it unused while the mode is off. 0 when MetalFX is asked for on a GPU without the scaler (nothing changes)
+int mtl_present_upscale_set(int on) {
+    if (on && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) return 0;
+    fx_mode(); __atomic_store_n(&g_fx_mode, on != 0, __ATOMIC_RELAXED);
+    MLOG("present upscaling: %s (set while the game runs)", on ? "metalfx" : "off, bilinear");
+    return 1;
 }
 // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
 static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {

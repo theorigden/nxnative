@@ -323,12 +323,15 @@ static void read_layout(module_t *m, const char *dir) {
 uint8_t *dm_fps_state;
 int dm_fps_step_max;   // the largest step the stubs give the game (STEP_MAX in its fixups table; 0 = FSTEP_MAX): the frame step holds frames and pays back within it (hle_nvn.c)
 static const char *g_fps_mod;   // the module holding the state page (for the log)
+static int g_render_scale_stub;   // main has a render-scale stub (its fixups table names RENDER_SCALE)
 static float g_render_scale_max = 1.0f;   // the render-scale stub's largest scale (RENDER_SCALE in its fixups table; 1 for a stub that only lowers the game's size)
 static void install_fps_state(module_t *m) {
     if (m->fps_state_off + 0x40 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
     dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name; dm_fps_step_max = (int)m->step_max;
     if (m->render_scale_max > 1) g_render_scale_max = (float)m->render_scale_max;
+    g_render_scale_stub = m->render_scale_max != 0;
 }
+float dm_render_scale_limit(void) { return g_render_scale_stub ? g_render_scale_max : 0; }   // settings_live.c: the largest DM_RENDER_SCALE the stub takes, 0 without a stub
 // The settings in the state page, written when the game starts (main.c, after host loading): on iOS the loading runs at app launch, before the launcher has set DM_FPS_TARGET and
 // DM_RENDER_SCALE (Launcher.swift), and nothing reads the page before the game runs
 // The front end's screen queries (front_mac.m, front_ios.m): weak defaults that answer "not known" for a host without a front end (unit tests), as hle_vi.c does
