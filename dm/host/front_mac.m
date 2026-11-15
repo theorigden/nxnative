@@ -690,10 +690,14 @@ void front_picture_shape(int w, int h) {
     g_picture_aspect = (double)w / h;
     if (g_layer) dispatch_async(dispatch_get_main_queue(), ^{ NSView *v = g_win.contentView; if ([v isKindOfClass:DmGameView.class]) [(DmGameView *)v fitDrawable]; });   // the area it is fitted to may change
 }
-// The Mac's DM_SCREEN_ASPECT=auto (loader.c): the width / height of the screen the window opens on, its whole frame (a camera housing's row included: fullscreen covers it).
+// The Mac's DM_SCREEN_ASPECT=auto (loader.c): the width / height of the screen the window opens on, as fullscreen shows it.
 // Called on the main thread before the window is up
-double front_screen_aspect_auto(void) {
-    @autoreleasepool { NSScreen *s = NSScreen.mainScreen ?: NSScreen.screens.firstObject; if (!s || s.frame.size.height <= 0) return 0; return s.frame.size.width / s.frame.size.height; }
+double front_screen_aspect_auto(void) {   // below a camera housing's row unless fullscreen covers it (DM_FULLSCREEN_NOTCH=1): the area macOS's own fullscreen shows
+    @autoreleasepool {
+        NSScreen *s = NSScreen.mainScreen ?: NSScreen.screens.firstObject; if (!s || s.frame.size.height <= 0) return 0;
+        CGFloat h = s.frame.size.height - (fs_whole_wanted(s) ? 0 : s.safeAreaInsets.top);
+        return h > 0 ? s.frame.size.width / h : 0;
+    }
 }
 extern uint8_t *dm_fps_state;   // loader.c: the frame step state page of a game with one
 // The picture fills the whole view, a camera housing's row included: over the whole screen (fs_whole_enter) with the screen's own shape (within 2%, as the present fills it:
