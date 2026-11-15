@@ -233,6 +233,24 @@ def screen_shape(ctx):
          0xb940a009, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x540000a0, 0x7100056b, 0x54ffff81,
          0xbd405e11, 0x1e310821),
          'PerspectiveProjection matrix: the HUD camera (16:9, near 1, far 10000) takes the screen\'s ratio and a widened vertical angle')
+    # The scene's camera: main+0x628c14.. (x19 the camera, x20 its sead::PerspectiveProjection) sets the projection every frame from the camera's own near, far, fovy and
+    # aspect (+0x134 .. +0x140, an inlined set()), and its aspect is the constant 16:9 (runtime: 1.7778, fovy 50, three projections), so the setFovy_ / set() stubs never
+    # matched and the taller picture was the 16:9 view stretched up and down. A 16:9 camera (within the tolerance, +0x60) takes the screen's ratio (+0x58) and a vertical
+    # angle widened by k (+0x5c): 16:9's horizontal view, more above and below. Caller-saved registers are dead here (sinf follows); s1 (0.5) is restored
+    CAM_FOVY = (0xbd413e60, None, 0xbd405a01, 0x1e202028, 0x540001e0, 0xbd414262, 0xbd407603, 0x7ea3d442, 0xbd406203, 0x1e232040, 0x5400012a,
+                0x1e2c1001, 0x1e210800, 'tanf', None, 0xbd405e01, 0x1e210800, 'atanf', 0x1e202800, 0x1e2c1001)
+    fs_site(0x628c3c, '603e41bd')
+    start = here()
+    for w in CAM_FOVY:
+        if w is None: emit(ADRP(16, here(), STATE))
+        elif w == 'tanf': emit(_bl(here(), TANF))
+        elif w == 'atanf': emit(_bl(here(), ATANF))
+        else: emit(w)
+    emit(B(here(), 0x628c40))
+    fs_put(0x628c3c, [B(0x628c3c, start)], 'the scene camera\'s fovy (16:9 aspect) widened for the screen\'s ratio')
+    stub(0x628c7c, '80b200bd', (None, 0xbd405a01, 0x1e202028, 0x540000e0, 0xbd407602, 0x7ea2d402, 0xbd406203, 0x1e232040, 0x5400004a, 0x1e204020,
+                                0xbd00b280),
+         'the scene camera\'s aspect 16:9 → the screen\'s ratio')
     # duo_calc(pane, state + 0x80, Pane::DrawSelf) after the global matrix, while the output's height is set. x0..x18 are dead at the site (x19 the pane)
     code = here()
     for i in range(0, len(_duo_anchor), 8): emit(int(_duo_anchor[i:i + 8], 16))
