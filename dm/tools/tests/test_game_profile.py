@@ -40,6 +40,26 @@ class PsoGPU(unittest.TestCase):
             self.assertIn(': pso_gpu takes 1-4 whitespace-separated GPU architectures', out, rows)
 
 
+class PlatformRows(unittest.TestCase):   # <key>@ios rows: the iOS host's value of that key, the Mac's stays the plain row's (Game.platform)
+    def text(self, rows):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, ID).mkdir()
+            (Path(d, ID) / 'game.tsv').write_text(TSV + rows)
+            r = subprocess.run([sys.executable, str(GAME), 'header', ID, str(Path(d, ID) / 'game.h')], env={**os.environ, 'DM_GAMES_DIR': d}, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return (Path(d, ID) / 'game.h').read_text()
+
+    def test_ios_value(self):
+        h = self.text('mem_reserve@ios\t0x80000\napp_pool@ios\t0x40000\n')
+        self.assertIn('#include <TargetConditionals.h>', h)
+        self.assertIn('#if TARGET_OS_IPHONE\n#define DM_GAME_MEM_RESERVE 0x80000ull\n#else\n#define DM_GAME_MEM_RESERVE 0x100000ull\n#endif', h)
+        self.assertIn('#if TARGET_OS_IPHONE\n#define DM_GAME_APP_POOL 0x40000ull\n#else\n#define DM_GAME_APP_POOL 0x100000ull\n#endif', h)
+        self.assertIn('#define DM_GAME_MEM_ALIAS 0x100000ull\n', h)
+
+    def test_same_value_unchanged(self):   # a row equal to the plain one, or none: the header as before
+        self.assertEqual(self.text('mem_reserve@ios\t0x100000\n').split('\n')[1:], self.text('').split('\n')[1:])   # past the line naming the (temporary) profile folder
+        self.assertNotIn('TARGET_OS_IPHONE', self.text(''))
+
 
 MAP = ('# kind: evidence  Test shaders\n# column 5 records where each key first appears\npackage\tindex\tstage\tdm_ctl_sha16\tsource\n'
        'cs_other.bin\t1\tcompute\tc56db3d5a0f1b5af\t/Lib/agl/agl_resource.Nin_Ounce_NVN2.release.sarc.zs/agl_ndsr.pck#NDSR@0x124900\n'
