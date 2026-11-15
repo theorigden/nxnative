@@ -162,13 +162,14 @@ void front_screen_match(int fps) {
 // Fullscreen over the whole screen of a Mac with a camera housing (the notch). macOS's own fullscreen keeps a window below the housing's row: on a 16" M1 Max it stays
 // 1728x1084 of the screen's 1728x1117 points, even when -window:willUseFullScreenContentSize: or -constrainFrameRect:toScreen: ask for the whole screen, and the row
 // beside the housing stays black. On such a screen the window instead goes borderless over the whole screen, the menu bar and the Dock hiding until the pointer
-// reaches them, as in macOS's own fullscreen (DM_FULLSCREEN_NOTCH=0 keeps macOS's own). The green button, ⌃⌘F and DM_FULLSCREEN all reach it through
+// reaches them, as in macOS's own fullscreen (only with DM_FULLSCREEN_NOTCH=1; macOS's own by default). The green button, ⌃⌘F and DM_FULLSCREEN all reach it through
 // -toggleFullScreen: (DmGameWindow). A picture of the screen's own shape (DM_SCREEN_ASPECT=auto on a profile with screen_aspect) fills the whole screen, the row beside
 // the housing too, and the game keeps its HUD below that row (state +0x64, hud_inset_update). Any other picture is not drawn behind the housing: DmGameView fits it to
 // the whole screen when the black bars around it are at least as tall as the housing's row (a 16:9 game on the 16:10 screen), and below the row otherwise.
 static NSRect g_fs_saved; static NSWindowStyleMask g_fs_saved_style;   // the window's frame and style before, which leaving puts back
-static int fs_whole_wanted(NSScreen *s) {   // fullscreen on this screen covers the whole of it: it has a housing, and DM_FULLSCREEN_NOTCH is not 0
-    static int off = -1; if (off < 0) { const char *e = getenv("DM_FULLSCREEN_NOTCH"); off = e && !strcmp(e, "0"); }
+static int fs_whole_wanted(NSScreen *s) {   // fullscreen on this screen covers the whole of it: it has a housing, and DM_FULLSCREEN_NOTCH=1 asks for it
+    // (macOS's own fullscreen by default: the player preferred a true fullscreen Space, the housing's row left black, to the borderless window over the whole screen)
+    static int off = -1; if (off < 0) { const char *e = getenv("DM_FULLSCREEN_NOTCH"); off = !(e && strcmp(e, "0")); }
     return !off && s && s.safeAreaInsets.top > 0;
 }
 static void fs_entered(NSWindow *w) { screen_refresh(w.screen); g_fullscreen = 1; g_layer.contentsScale = w.backingScaleFactor; screen_match_apply(); }

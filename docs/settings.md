@@ -87,7 +87,7 @@ iPhone and iPad. **Fit**, the default, shows the game's picture (16:9, or the ta
 
 ### Picture shape
 
-Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **Match screen**, the default, renders the shape of the screen: an iPad's 4:3, an iPhone's or a MacBook's taller-than-16:9 screen; a 16:9 screen keeps 16:9. On a MacBook with a camera housing, fullscreen then fills the strip beside the housing too, and the game keeps its HUD below it. **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
+Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **Match screen**, the default, renders the shape of the screen: an iPad's 4:3, an iPhone's or a MacBook's taller-than-16:9 screen; a 16:9 screen keeps 16:9. With `DM_FULLSCREEN_NOTCH=1` on a MacBook with a camera housing, fullscreen fills the strip beside the housing too, and the game keeps its HUD below it. **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
 
 ### Resolution
 
@@ -239,7 +239,7 @@ Turn off **Show this window at launch** to start the game at once with your choi
 
 **Window** or **Fullscreen**: how the game's window opens. ⌃⌘F or the green button changes it while you play. In an `env.txt`: `DM_FULLSCREEN=1` or `0`.
 
-On a MacBook with a notch, fullscreen covers the whole screen, the strip beside the notch included, where macOS's own fullscreen leaves that strip black; the menu bar and the Dock appear when the pointer reaches them. A picture of the screen's own shape ([Picture shape](#picture-shape) **Match screen**, in games that support it) fills the whole screen, the strip beside the notch too, and the game keeps its HUD below the notch. Any other picture is never drawn behind the notch: a 16:9 picture is centred on the whole screen, its black bars covering the strip, and a picture too tall for that sits just below the notch. You can't swipe to this fullscreen as to another Space; use ⌘Tab. `DM_FULLSCREEN_NOTCH=0` in the `env.txt` uses macOS's own fullscreen instead.
+On a MacBook with a notch, fullscreen is macOS's own: the picture sits below the notch, the strip beside it black. `DM_FULLSCREEN_NOTCH=1` in the `env.txt` makes fullscreen cover the whole screen instead, the strip beside the notch included; a picture of the screen's own shape ([Picture shape](#picture-shape) **Match screen**) then fills it, with the HUD kept below the notch.
 
 ### Sound
 
