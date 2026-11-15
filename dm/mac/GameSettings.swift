@@ -127,6 +127,15 @@ final class GameSettings {
         }
     }
 
+    // DM_CTL "menushot <path>": the window as drawn now, as a PNG (a check of its look without a screen capture)
+    func snapshot(_ path: String) -> Bool {
+        guard let v = view, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { log("[RED] menushot: the window is not open"); return false }
+        v.cacheDisplay(in: v.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: URL(fileURLWithPath: path))) != nil else { log("[RED] menushot: cannot write \(path)"); return false }
+        log("menushot \(path)")
+        return true
+    }
+
     // DM_CTL "set <VAR>=<value>" (hle_hid.c): as a choice in the window, open or not
     func set(_ env: String, _ v: String) -> Bool {
         guard let s = model.settings.first(where: { $0.env == env }), s.accepts(v), !model.fixed.contains(env) else { log("[RED] set \(env)=\(v): not a setting of this list, fixed, or not a value it takes"); return false }
@@ -144,6 +153,7 @@ final class GameSettings {
 @_cdecl("dm_settings_panel_close") public func dmSettingsPanelClose() { GameSettings.shared?.close() }
 @_cdecl("dm_settings_panel_is_open") public func dmSettingsPanelIsOpen() -> Int32 { GameSettings.shared?.isOpen == true ? 1 : 0 }
 @_cdecl("dm_settings_panel_nav") public func dmSettingsPanelNav(_ code: Int32) { GameSettings.shared?.nav(Int(code)) }
+@_cdecl("dm_settings_panel_snapshot") public func dmSettingsPanelSnapshot(_ path: UnsafePointer<CChar>) -> Int32 { GameSettings.shared?.snapshot(String(cString: path)) == true ? 1 : 0 }
 @_cdecl("dm_settings_panel_set") public func dmSettingsPanelSet(_ env: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>) -> Int32 {
     guard let g = GameSettings.load() else { return 0 }
     return g.set(String(cString: env), String(cString: value)) ? 1 : 0

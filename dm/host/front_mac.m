@@ -727,6 +727,7 @@ void dm_settings_panel_close(void);
 int dm_settings_panel_is_open(void);
 void dm_settings_panel_nav(int code);   // 0 up, 1 down, 2 left, 3 right, 4 A, 5 B
 int dm_settings_panel_set(const char *env, const char *value);
+int dm_settings_panel_snapshot(const char *path);
 static int g_set_open, g_set_settle;   // the window is open; it was closed and the controllers still hold a button
 static NSTimer *g_set_timer;
 static uint64_t g_set_held; static double g_set_rep;   // the menu buttons down at the last poll, and when the held direction repeats next
@@ -826,7 +827,7 @@ int front_setting_live(const char *env, const char *value) {
     }
     return settings_live_apply(env, value);
 }
-// DM_CTL (hle_hid.c, any thread): "menu open", "menu close", "menu toggle", "menunav <code>", "set <VAR>=<value>"
+// DM_CTL (hle_hid.c, any thread): "menu open", "menu close", "menu toggle", "menunav <code>", "menushot <png path>", "set <VAR>=<value>"
 void front_settings_ctl(const char *line) {
     char *l = strdup(line);
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -834,8 +835,9 @@ void front_settings_ctl(const char *line) {
         else if (!strcmp(l, "menu close")) dm_settings_panel_close();
         else if (!strcmp(l, "menu toggle")) settings_toggle();
         else if (!strncmp(l, "menunav ", 8)) { if (g_set_open) dm_settings_panel_nav(atoi(l + 8)); }
+        else if (!strncmp(l, "menushot ", 9)) dm_settings_panel_snapshot(l + 9);
         else if (!strncmp(l, "set ", 4)) { char *eq = strchr(l + 4, '='); if (eq) { *eq = 0; dm_settings_panel_set(l + 4, eq + 1); } }
-        else LOG("[RED] DM_CTL: %s: menu open | close | toggle, menunav <0-5>, set <VAR>=<value>", l);
+        else LOG("[RED] DM_CTL: %s: menu open | close | toggle, menunav <0-5>, menushot <path>, set <VAR>=<value>", l);
         free(l);
     });
 }

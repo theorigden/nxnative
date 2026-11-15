@@ -62,7 +62,10 @@ final class LauncherModel: ObservableObject {
         if ignoreSaved { fputs("launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n", stderr) }
         for s in settings {
             if fixed.contains(s.env), let v = env[s.env] { values[s.env] = v; continue }
-            if running, let p = getenv(s.env), s.accepts(String(cString: p)) { values[s.env] = String(cString: p); continue }
+            if running {   // what the game started with: the launcher put every choice in the environment, so an unset variable is at its default
+                let v = getenv(s.env).map { String(cString: $0) }
+                values[s.env] = v.flatMap { s.accepts($0) ? $0 : nil } ?? s.def; continue
+            }
             let saved = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env) as? String   // a string, as launcher.c reads it: not string(forKey:), which turns a number into one
             values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
         }
