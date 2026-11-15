@@ -82,7 +82,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 43 | 0 | 0 | `build` → `game` ×2 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 2 | 0 | 0 | `game` ×2 |
-| [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 37 | 0 | 0 | `game`, `build` → `game` |
+| [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 38 | 0 | 0 | `game`, `build` → `game` |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Xenoblade Chronicles X: Definitive Edition](#xenoblade-chronicles-x-definitive-edition) | 6 | 0 | 1 | 1 | 0 | `game` ×2 |
 
@@ -592,8 +592,8 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`game`**, frame rate, at goal, checked: 1.4.3 main: one function of each fingerprint; the rule rewrites it byte-identical to its former build entry (2026-11-09): 60 fps frame step and render scale. The game's own timing object, found by its six functions' fingerprints on any build that keeps them; no engine sibling shares the code (BotW, SMO, MK8D, ACNH, Splatoon 2 / 3, Kirby, Mario Party, Ocarina, Smash, Metroid Dread, Origami King: no exact match, 2026-11-09)
 - **`build` → `game`**, rendering, blocked: no function-matched form yet: build 1.4.3 only (FRAME_STEP), judgement: screen shape and output size. The display size, layout size, crop, final image and HUD projection in nnMain, agl and the display objects, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate / CalculateGlobalMatrix
 
-- **1.4.3 `main`** `277178b7…` ([patches.py:298](../../dm/games/0100F2C0115B6000/patches.py#L298))
-  <details><summary>28 frame-step sites</summary>
+- **1.4.3 `main`** `277178b7…` ([patches.py:325](../../dm/games/0100F2C0115B6000/patches.py#L325))
+  <details><summary>29 frame-step sites</summary>
 
   - frame step `+0x8d860`: final image (agl::RenderDisplay) 1920x1080 → the host's output size
   - frame step `+0xd5cc0`: view render size x the host render scale (1.0 = original)
@@ -611,6 +611,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x628c7c`: the scene camera's aspect 16:9 → the screen's ratio
   - frame step `+0x6ee938`: 1280x720 default of an object (+0x1fc)
   - frame step `+0x8c3fe8`: 1280x720 defaults of an object (eight slots)
+  - frame step `+0x92d94c`: HeapDef sizes: Graphics and DynamicTextureAllocatorMem grow with 3D views past 1600x1080 (an output size from the host)
   - frame step `+0xbdb584`: display size 1920x1080 (window textures, frame buffer) → the host's output size
   - frame step `+0xbdb6a0`: layout size 1280x720 → the host's layout height
   - frame step `+0xbe14a8`: swapchain argument 1 when on (FPSLocker)

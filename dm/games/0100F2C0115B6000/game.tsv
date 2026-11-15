@@ -33,11 +33,14 @@ icon_font	Font/Font.Nin_NX_NVN.bfarc.zs:scft/External.bfotf	E040=A E041=B E042=X
 # The game also calls SetHeapSize(0x86000000) in nninitStartup (2.1 GB of the pool as its heap; a 2 GB heap region aborts there with 0xd401).
 # What it can map is bounded by the pool less the heap (1.1 GB). The sdk build's node area is cut from ~1 GB to 62 MB (dm/tools/sdk_patches.py): measured on the Mac, the alias region is then used
 # up to +1.75 GB on the Great Sky Island with 1.0 GB mapped. Without the cut it reached +2.25 GB at the first descent and the game took a memory shortage (MSF, a Blood Moon that puts Link back, issue #70).
-# So 5 GB, the total proven on a phone (one reservation of at most 6 GB without the extended virtual addressing entitlement): 256 MB in front + 2.375 GB alias region + 256 MB stack region + 2.125 GB heap region
-mem_reserve	0x140000000
+# nninitStartup's heap is the pool less the used memory less 1.07 GB (0x43400000, main+0xca5bd8), so the heap and the game's root heap follow app_pool. The pool is the Switch's
+# 3285 MB + 256 MB: the Graphics heap grows with 3D views past 1600x1080 (patches.py, main+0x92d94c, 68 bytes a pixel), and the root heap had about 150 MB to spare; with
+# 406 MB an output of 3840x2560 (+347 MB) fits. 5.25 GB in all (one reservation of at most 6 GB without the extended virtual addressing entitlement; 5 GB is proven on a phone):
+# 256 MB in front + 2.375 GB alias region + 256 MB stack region + 2.375 GB heap region
+mem_reserve	0x150000000
 mem_alias	0x98000000
 mem_stack	0x10000000
-app_pool	0xCD500000
+app_pool	0xDD500000
 
 # ---- Graphics ----
 # Streamed textures are written by the CPU straight into pool memory (already in GPU layout) and published with nvnMemoryPoolFlushMappedRange (hle_nvn.c ft_add)

@@ -162,6 +162,33 @@ def screen_shape(ctx):
     # display size: x8 = 1920 | 1080 << 32 → the host's height (+0x48) and width (+0x68) where set
     stub(0xbdb584, '0887c0f2', (0xf2c08708, None, 0xb9404a10, 0x34000050, 0xb3607e08, None, 0xb9406a10, 0x34000050, 0xb3407e08),
          'display size 1920x1080 (window textures, frame buffer) → the host\'s output size')
+    # Graphics memory for larger 3D views: the game's heap table (RomFS System/HeapSize/Product.Nin_NX_NVN.HeapDef.byml) gives agl::utl::DynamicTextureAllocator one
+    # fixed pool of 111 MB (DynamicTextureAllocatorMem, 113664 KB) inside the 197 MB Graphics heap. The views' targets come from it, so 3D views above about 1600x1080
+    # (an output above about 1920x1296) do not fit: the allocator returns null and main+0x1c2f20 reads +0xa0 of it. Every HeapDef size passes main+0x92d94c (Size in KB
+    # << 10; [x20] the heap's name): the two heaps take 68 bytes more for each 3D pixel past 1600x1080 (the pool is 67.4 bytes a pixel there; the views are 25/36 of
+    # the output's pixels, 5/6 each way). Only an output size from the host (state +0x68 width, +0x48 height) changes them. x9-x12 are free there
+    fs_site(0x92d94c, '08d576d3')
+    start = here()
+    for w in (0xd376d508,   # lsl x8, x8, #10          (original) the size in bytes
+              0xf940028a,   # ldr x10, [x20]           the heap's name
+              0xf940014b,   # ldr x11, [x10]           its first 8 bytes
+              0xd28e48ec, 0xf2ae0c2c, 0xf2cd2d0c, 0xf2ee6c6c,   # x12 = "Graphics"
+              0xeb0c017f, 0x54000081,   # cmp x11, x12; b.ne dyn (+4)
+              0x3940214b, 0x3400010b,   # ldrb w11, [x10, #8]; cbz w11, grow (+8)   "Graphics" itself
+              0x14000015,               # b out (+21)
+              0xd28f288c, 0xf2ac2dcc, 0xf2cd2dac, 0xf2ea8c6c,   # dyn: x12 = "DynamicT" (DynamicTextureAllocatorMem, the only such heap)
+              0xeb0c017f, 0x540001e1,   # cmp x11, x12; b.ne out (+15)
+              None,                     # grow: adrp x9, state
+              0xb940692a, 0xb940492b,   # ldr w10, [x9, #0x68]; ldr w11, [x9, #0x48]   output width, height (0 = the game's)
+              0x9b0a7d6b,               # mul x11, x11, x10
+              0xd280032a, 0x9b0a7d6b,   # mov x10, #25; mul x11, x11, x10
+              0xd280048a, 0x9aca096b,   # mov x10, #36; udiv x11, x11, x10     3D view pixels
+              0x528bc00a, 0x72a0034a,   # mov w10, #1600*1080
+              0xeb0a016b, 0x5400006d,   # subs x11, x11, x10; b.le out (+3)
+              0x8b0b1908, 0x8b0b0908):  # add x8, x8, x11, lsl #6; add x8, x8, x11, lsl #2   + 68 bytes per extra pixel
+        emit(ADRP(9, here(), STATE) if w is None else w)
+    emit(B(here(), 0x92d950))   # out
+    fs_put(0x92d94c, [B(0x92d94c, start)], 'HeapDef sizes: Graphics and DynamicTextureAllocatorMem grow with 3D views past 1600x1080 (an output size from the host)')
     # layout size: x8 = 1280.0 | 720.0 << 32 → the host's layout height (+0x50, float)
     stub(0xbdb6a0, '8886e8f2', (0xf2e88688, None, 0xb9405210, 0x34000050, 0xb3607e08),
          'layout size 1280x720 → the host\'s layout height')
