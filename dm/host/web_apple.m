@@ -375,8 +375,10 @@ static NSString *mime(NSString *ext) {
     NSString *f = [_dir stringByAppendingPathComponent:rel]; NSData *d = nil;
     if ([rel isEqualToString:@"__dm_font/nintendo_ext.ttf"]) {   // the Nintendo extension font (button icons): the host's stand-in, as the shared font service gives it (hle_sdk16.c)
         const char *e = getenv("DM_SHARED_FONT_EXT"), *fd = getenv("DM_FONT_DIR");
+        const char *v = dm_button_icons_variant();   // in the player's controller's style (button_icons.h), as the shared font service gives it
+        if (!e && fd && v) d = [NSData dataWithContentsOfFile:[@(fd) stringByAppendingPathComponent:[NSString stringWithFormat:@"nintendo_ext_%s.ttf", v]]];
         f = (e ? @(e) : fd ? [@(fd) stringByAppendingPathComponent:@"nintendo_ext.ttf"] : nil) ?: @"";   // @"": no path, or one that is not UTF-8, is not found
-        d = [NSData dataWithContentsOfFile:f];
+        if (!d) d = [NSData dataWithContentsOfFile:f];
     } else if (rel.length && ![rel containsString:@".."] && [f hasPrefix:_dir]) {
         d = [NSData dataWithContentsOfFile:f];
         // A relative URL that climbs out of the document's folder (the pause menu's stylesheet, css/index.css, names ../../img/ for the images in the folder's img/): the Switch

@@ -2705,20 +2705,24 @@ def build_env_file(work, env_file, motion):
     return str(f)
 
 
-def mac_host(py, repo, work, env, logs, g):
+def mac_host(py, repo, work, env, logs, g, romfs=None):
     """The stage "Mac host" of a Mac-only build or a Mac app (PLATFORM 'mac', 'mac-app'): the Mac host for the profile (build_mac_host, into <id>_build/tools/dmhost, where the run-time captures
     build it too; DM_GAMES_DIR / DM_GAMES_FIRST in env pick a provisional or derived profile) and the button-icon font the host gives a game for the Nintendo extension shared font
-    and the shared-font stand-ins (make_shared_fonts.py: one per type, into <id>_build/font, made again when the tools or the source font changed). Returns (host, font folder)"""
+    and the shared-font stand-ins (make_shared_fonts.py: one per type, into <id>_build/font, made again when the tools or the source font changed), with the game's own button-icon font
+    in the other controllers' styles when the profile has icon_font rows (game_icon_font.py, from romfs; DM_BUTTON_ICONS). Returns (host, font folder)"""
     PROG.stage('Mac host', step='building')
     host = build_mac_host(repo, work / 'tools/dmhost', env, logs, g)
     PROG.set(step='shared fonts')
     font, kf = work / 'font', work / 'font.key'
     src = Path(os.environ.get('STD_FONT') or '/System/Library/Fonts/Supplemental/Arial Unicode.ttf')
     st = src.stat() if src.is_file() else None
-    key = fingerprint(('files', [repo / 'dm/tools/make_shared_fonts.py', repo / 'dm/tools/make_ext_font.py']), ('font', str(src), st and st.st_size, st and int(st.st_mtime)))
+    icons = g.values('icon_font') if romfs else []
+    key = fingerprint(('files', [repo / 'dm/tools/make_shared_fonts.py', repo / 'dm/tools/make_ext_font.py', repo / 'dm/tools/game_icon_font.py']),
+                      ('font', str(src), st and st.st_size, st and int(st.st_mtime)), ('icons', icons, str(romfs) if icons else ''))
     if not ((font / 'korean.ttf').is_file() and reused(kf, key) is not None):
         rmtree(kf); rmtree(font); font.mkdir(parents=True, exist_ok=True)
         run([py, repo / 'dm/tools/make_shared_fonts.py', font, src], logs / 'make_shared_fonts.log', env=env)
+        if icons: run([py, repo / 'dm/tools/game_icon_font.py', romfs, font], logs / 'game_icon_font.log', env=dict(env, DM_GAME=g.id))
         kf.write_text(f'{key}\n')
     PROG.end(str(host))
     return host, font
@@ -3419,7 +3423,7 @@ def main(args=None):
     if mac_pack:   # a Mac app: the Mac host, then the app packed from it and the build's files
         if getattr(args, 'in_programs', None) is not None:   # a program of the game: the app its first program's build packs takes these
             rmtree(work / 'tmp'); return {'patched': patched, 'romfs': rfs.source(game), 'msl': ios / (f'b-{chain_of(repo)}' if gfx == 'nvn' else 'vk' if gfx == 'vulkan' else 'gl'), 'tables': g.table('shader_map.tsv').parent, 'html': game / 'html', 'gfx': gfx}
-        host, font = mac_host(py, repo, work, env, logs, g)
+        host, font = mac_host(py, repo, work, env, logs, g, rfs.source(game))
         programs = other_programs(args, g)
         if not icon: say(('no game icon: the NUP carries none' if nup else 'no game icon: a dump folder has no control data') + '; the app\'s icon will be blank; --icon / ICON or --fallback-icon / FALLBACK_ICON gives it one' if dump else '[RED] no game icon in the extraction (an older extraction did not save it: delete extract/ and run again); the app\'s icon will be blank')
         mac_app(py, repo, out_ipa, app, work, game, patched, host, font, ios, aoc, gfx, lang, g, app_name, app_version, bundle_id, icon, args.mac_sign or MAC_SIGN, env, logs, env_file,
@@ -3432,7 +3436,7 @@ def main(args=None):
         return
     if mac:   # a Mac-only build ends with the Mac host and the command that runs the game
         first = getattr(args, 'in_programs', None)   # a program packed with the application's first: its host, built over all of them, and its fonts
-        host, font = (first['host'], first['font']) if first else mac_host(py, repo, work, env, logs, g)
+        host, font = (first['host'], first['font']) if first else mac_host(py, repo, work, env, logs, g, rfs.source(game))
         parts = {'font': font}
         cmd = mac_run(work, game, patched, host, font, ios, aoc, gfx, lang, env, logs, g, env_file, partial=seen_shaders, parts=parts, jit=jit)
         rmtree(work / 'tmp')

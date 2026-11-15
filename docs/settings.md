@@ -4,9 +4,9 @@ The screen before the game starts shows the settings the game supports. A settin
 
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game's upscaler](#games-upscaler), [Game language](#game-language), [Picture](#picture), [Frame-rate counter](#frame-rate-counter)
-- [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join)
+- [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Controller buttons](#controller-buttons)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
-- [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
+- [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode), [Sound](#sound)
 - [In-game menu](#in-game-menu)
 - [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
@@ -85,9 +85,21 @@ The game's own languages. The app was packed with one of them; pick another here
 
 iPhone and iPad. **Fit**, the default, shows the game's picture (16:9, or the taller one of [Picture shape](#picture-shape)) as large as it fits, with black bars where the screen has another shape. **Fill** enlarges it until it covers the whole screen and crops what lies outside; nothing is stretched. An iPhone loses some of the top and bottom, an iPad some of each side, so health bars, subtitles or maps near the edges can be cut off. A picture that fills the screen without cropping needs a patch for each game that renders a wider view. Fill applies in landscape; in portrait the picture stays fitted above the controls, and on a TV it is always fitted.
 
+### Tone map
+
+Games whose profile names their tone map (Tears of the Kingdom). How the game's bright scene is brought down to the screen's range. **Game's own**, the default, is the game's curve, the same picture as without the setting. **AgX** keeps colours natural as they get brighter, so skies, fire and lights fade towards white instead of turning one saturated colour. **ACES** is the filmic curve many games use: more contrast and deeper shadows. AgX and ACES keep the game's overall brightness; the game's own slight saturation boost stays on all three. Grading values (exposure, contrast, saturation, black point) can be set in an `env.txt` ([Settings in a file](#settings-in-a-file)) and change the picture at once when an in-game menu sets them.
+
+### AgX look
+
+With **AgX**: **Standard**, **Punchy** (more contrast and colour) or **Golden** (a warm, sunlit tint).
+
 ### Picture shape
 
-Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
+Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **Match screen**, the default, renders the shape of the screen: an iPad's 4:3, an iPhone's or a MacBook's taller-than-16:9 screen; a 16:9 screen keeps 16:9. With `DM_FULLSCREEN_NOTCH=1` on a MacBook with a camera housing, fullscreen fills the strip beside the housing too, and the game keeps its HUD below it. **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
+
+### Resolution
+
+Games whose profile supports it (Tears of the Kingdom). **Screen's native**, the default, renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)** renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate.
 
 ### Frame-rate counter
 
@@ -114,6 +126,10 @@ A controller's vibration weaker than this stays off, and the rest is spread over
 ### Press a button to join
 
 Off by default: each controller is a player as soon as it connects, in the order the system lists them. On: a controller becomes a player only when you press one of its buttons, as the lowest player free, so the players choose their order and how many play. That press also reaches the game. When a game asks for more players than have joined, a prompt over the game waits for the others to press a button; B closes it.
+
+### Controller buttons
+
+How an Xbox or PlayStation controller's four face buttons reach the game. **As on a Switch**, the default, keeps the Switch's layout: the right button is A and the bottom one B, so on an Xbox controller the button printed B is the game's A. **As printed** follows the letters instead: an Xbox controller's A, the bottom button, is the game's A, as in most Xbox and PC games (on a PlayStation controller, cross). The game's own button prompts still show the Switch's letters. A Nintendo controller always follows its letters. To move other buttons, use the system's own controller settings: on the Mac, System Settings › Game Controllers; on the iPhone and iPad, Settings › General › Game Controller.
 
 ## Performance
 
@@ -231,6 +247,16 @@ Turn off **Show this window at launch** to start the game at once with your choi
 
 **Window** or **Fullscreen**: how the game's window opens. ⌃⌘F or the green button changes it while you play. In an `env.txt`: `DM_FULLSCREEN=1` or `0`.
 
+On a MacBook with a notch, fullscreen is macOS's own: the picture sits below the notch, the strip beside it black. `DM_FULLSCREEN_NOTCH=1` in the `env.txt` makes fullscreen cover the whole screen instead, the strip beside the notch included; a picture of the screen's own shape ([Picture shape](#picture-shape) **Match screen**) then fills it, with the HUD kept below the notch.
+
+### Sound
+
+**Spatial audio** (the default) or **Stereo**. With Spatial audio the game is told it plays on a 5.1 system, as a Switch docked to a surround TV, and games that mix surround (Tears of the Kingdom) send front, centre, rear and LFE channels. The Mac renders them through Apple's spatial audio: on headphones the sound comes from around you, and AirPods with head tracking keep it in place as you turn your head; on the built-in speakers it is widened for them. A receiver or TV set up for 5.1 in Audio MIDI Setup (Configure Speakers) gets the six channels as they are. Plugging in or removing headphones, or connecting AirPods, switches the rendering while you play. Games that mix only stereo sound as before. **Stereo** tells the game it has two speakers. In an `env.txt`: `DM_AUDIO_SURROUND=spatial` or `stereo`.
+
+### HDR
+
+Games whose profile supports it (Tears of the Kingdom). **On** by default, which is automatic: a screen with HDR (a MacBook Pro's XDR display, a Pro Display XDR, an HDR monitor or TV) shows the bright parts of the picture, the sun, fire, lights and reflections, above the white of the rest of the screen, up to what the screen can show at its current brightness (more at lower brightness). The HUD, menus and text stay at the screen's normal white. Moving the window to a screen without HDR switches it back to the normal picture. Works with each [Tone map](#tone-map). In an `env.txt`: `DM_HDR=1`, and `DM_GRADE_PEAK=<n>` caps the brightest value at n times the normal white.
+
 ### Switch 2 controllers
 
 **Off** by default. On, the game takes Joy-Con 2 and Pro Controller 2 over Bluetooth: hold the small Sync button on one during the game, until its player lights sweep, to pair it with this Mac; after that a press of any of its buttons connects it ([Switch 2 controllers](playing.md#switch-2-controllers-mac)). macOS asks for Bluetooth access the first time, and again after the app is packed again. In an `env.txt`: `DM_SW2=1`.
@@ -246,6 +272,8 @@ The Mac app and the iPhone app of one game can share a save through iCloud Drive
 When the game starts, it brings the save from iCloud Drive in if only that one changed since the last sync; a few seconds after the game saves, it sends its save if only this one changed. The iPhone app also sends when it goes to the background, and the Mac app once the game has quit. If you played on both without the save getting across in between, **Play** asks which save to keep: each with its date and size, since the newer one is not always the one with more progress (a new game saved a minute later is newer). The one you don't pick is kept, as below. Without the settings screen (the Mac's `DM_LAUNCHER=0`), the newer save wins.
 
 A save that is replaced, on the device or in iCloud Drive, is kept first, beside the save in a folder named after it with `-backups` (on the iPhone `save-backups` in the Files app, under the app's name; on the Mac `~/Library/Application Support/nxnative/<title ID>/save-backups`): `<date> local` holds this device's save, `<date> cloud` the one that was in iCloud Drive. The newest 10 of each kind stay, and older ones are removed; other folders you put there are left alone.
+
+A notice at the top right of the game says what happened, for a few seconds: when the game first loads its save, **iCloud: save up to date**, **loaded the save from your iPhone** (or Mac, or iPad) with when it was saved, **the save on this Mac is the newest; sending it**, or that iCloud is not reachable; after each save that reaches iCloud, **Saved to iCloud**. A save that cannot be sent says so once, and again only after one has gone through. With cloud saves off there is no notice.
 
 iCloud Drive takes a moment to carry a file from one device to the other. Quit the game on one device and give it a few seconds before you start it on the other. **Play** waits for the save in iCloud Drive to download, with **Play Without It** to go on at once; without a connection, or when it has not come in a minute, it says so and offers this device's save or another try. The game then plays on with the save it has and sends it later. If the save in iCloud Drive changed meanwhile, the game sends nothing that session, and the next start decides between the two as above. The game log says what came in and what went out (lines starting with `save sync:`).
 
@@ -270,15 +298,23 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Console mode | `DM_OPMODE` | `1` docked, `0` handheld |
 | Game language | `DM_LANG` | a language code, such as `ja` |
 | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
+| Sound (Mac) | `DM_AUDIO_SURROUND` | `spatial` 5.1 through spatial audio, `stereo` |
 | Cloud saves folder (Mac) | `DM_SAVE_SYNC` | a folder; `icloud`: iCloud Drive › nxnative Saves; `0`: off |
 | Picture (iPhone and iPad) | `DM_PICTURE_FIT` | `fit` 16:9 with black bars, `fill` covers the screen, cropped |
-| Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is taller than 16:9 (iPad 4:3, iPhone Duo 1.43:1), else 16:9 (iOS only); `1.43` the iPhone Duo's shape, `0` 16:9 |
+| Tone map | `DM_TONEMAP` | `game`, `agx`, `aces` |
+| AgX look | `DM_GRADE_LOOK` | `none`, `punchy`, `golden` |
+| Grading (no screen setting) | `DM_GRADE_EV`, `DM_GRADE_CONTRAST`, `DM_GRADE_SATURATION`, `DM_GRADE_BLACK`, `DM_GRADE_GAME_SAT` | exposure in stops (`0`), contrast and saturation factors (`1`), black point (`0`; above 0 deepens the blacks), the game's own saturation step `1` / `0` |
+| HDR (Mac) | `DM_HDR` | `1`, `0`; `DM_GRADE_PEAK=<n>` caps the peak at n times SDR white |
+| Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is taller than 16:9 (iPad 4:3, iPhone Duo 1.43:1), else 16:9; on a Mac the shape of the screen the game opens on (a MacBook Pro's 1.55:1, past its camera housing in fullscreen), 16:9 on a 16:9 display; `1.43` the iPhone Duo's shape, `0` 16:9 |
+| Resolution | `DM_OUTPUT_RES` | `native` the pixel size of the screen the game opens on, `0` 1920 wide (the docked Switch's) |
 | Frame-rate counter | `DM_SHOW_FPS` | `1`, `0` |
 | Touch feedback | `DM_TOUCH_HAPTICS` | `1`, `0` |
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Press a button to join | `DM_PAD_PRESS_TO_JOIN` | `1`, `0` |
+| Controller buttons | `DM_PAD_FACE` | `position` as on a Switch, `label` as printed |
+| Button icons (Mac) | `DM_BUTTON_ICONS` | `auto` the icons of the controller connected at start (Xbox, PlayStation, else the Switch's), `switch`, `xbox`, `playstation` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Game's upscaler | `DM_UPSCALER` | `game`, `metalfx` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
