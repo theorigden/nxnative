@@ -85,6 +85,14 @@ The game's own languages. The app was packed with one of them; pick another here
 
 iPhone and iPad. **Fit**, the default, shows the game's picture (16:9, or the taller one of [Picture shape](#picture-shape)) as large as it fits, with black bars where the screen has another shape. **Fill** enlarges it until it covers the whole screen and crops what lies outside; nothing is stretched. An iPhone loses some of the top and bottom, an iPad some of each side, so health bars, subtitles or maps near the edges can be cut off. A picture that fills the screen without cropping needs a patch for each game that renders a wider view. Fill applies in landscape; in portrait the picture stays fitted above the controls, and on a TV it is always fitted.
 
+### Tone map
+
+Games whose profile names their tone map (Tears of the Kingdom). How the game's bright scene is brought down to the screen's range. **Game's own**, the default, is the game's curve, the same picture as without the setting. **AgX** keeps colours natural as they get brighter, so skies, fire and lights fade towards white instead of turning one saturated colour. **ACES** is the filmic curve many games use: more contrast and deeper shadows. AgX and ACES keep the game's overall brightness; the game's own slight saturation boost stays on all three. Grading values (exposure, contrast, saturation, black point) can be set in an `env.txt` ([Settings in a file](#settings-in-a-file)) and change the picture at once when an in-game menu sets them.
+
+### AgX look
+
+With **AgX**: **Standard**, **Punchy** (more contrast and colour) or **Golden** (a warm, sunlit tint).
+
 ### Picture shape
 
 Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **Match screen**, the default, renders the shape of the screen: an iPad's 4:3, an iPhone's or a MacBook's taller-than-16:9 screen; a 16:9 screen keeps 16:9. With `DM_FULLSCREEN_NOTCH=1` on a MacBook with a camera housing, fullscreen fills the strip beside the housing too, and the game keeps its HUD below it. **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
@@ -245,6 +253,10 @@ On a MacBook with a notch, fullscreen is macOS's own: the picture sits below the
 
 **Spatial audio** (the default) or **Stereo**. With Spatial audio the game is told it plays on a 5.1 system, as a Switch docked to a surround TV, and games that mix surround (Tears of the Kingdom) send front, centre, rear and LFE channels. The Mac renders them through Apple's spatial audio: on headphones the sound comes from around you, and AirPods with head tracking keep it in place as you turn your head; on the built-in speakers it is widened for them. A receiver or TV set up for 5.1 in Audio MIDI Setup (Configure Speakers) gets the six channels as they are. Plugging in or removing headphones, or connecting AirPods, switches the rendering while you play. Games that mix only stereo sound as before. **Stereo** tells the game it has two speakers. In an `env.txt`: `DM_AUDIO_SURROUND=spatial` or `stereo`.
 
+### HDR
+
+Games whose profile supports it (Tears of the Kingdom). **Off** by default. On, a screen with HDR (a MacBook Pro's XDR display, a Pro Display XDR, an HDR monitor or TV) shows the bright parts of the picture, the sun, fire, lights and reflections, above the white of the rest of the screen, up to what the screen can show at its current brightness (more at lower brightness). The HUD, menus and text stay at the screen's normal white. Moving the window to a screen without HDR switches it back to the normal picture. Works with each [Tone map](#tone-map). In an `env.txt`: `DM_HDR=1`, and `DM_GRADE_PEAK=<n>` caps the brightest value at n times the normal white.
+
 ### Switch 2 controllers
 
 **Off** by default. On, the game takes Joy-Con 2 and Pro Controller 2 over Bluetooth: hold the small Sync button on one during the game, until its player lights sweep, to pair it with this Mac; after that a press of any of its buttons connects it ([Switch 2 controllers](playing.md#switch-2-controllers-mac)). macOS asks for Bluetooth access the first time, and again after the app is packed again. In an `env.txt`: `DM_SW2=1`.
@@ -289,6 +301,10 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Sound (Mac) | `DM_AUDIO_SURROUND` | `spatial` 5.1 through spatial audio, `stereo` |
 | Cloud saves folder (Mac) | `DM_SAVE_SYNC` | a folder; `icloud`: iCloud Drive › nxnative Saves; `0`: off |
 | Picture (iPhone and iPad) | `DM_PICTURE_FIT` | `fit` 16:9 with black bars, `fill` covers the screen, cropped |
+| Tone map | `DM_TONEMAP` | `game`, `agx`, `aces` |
+| AgX look | `DM_GRADE_LOOK` | `none`, `punchy`, `golden` |
+| Grading (no screen setting) | `DM_GRADE_EV`, `DM_GRADE_CONTRAST`, `DM_GRADE_SATURATION`, `DM_GRADE_BLACK`, `DM_GRADE_GAME_SAT` | exposure in stops (`0`), contrast and saturation factors (`1`), black point (`0`; above 0 deepens the blacks), the game's own saturation step `1` / `0` |
+| HDR (Mac) | `DM_HDR` | `1`, `0`; `DM_GRADE_PEAK=<n>` caps the peak at n times SDR white |
 | Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is taller than 16:9 (iPad 4:3, iPhone Duo 1.43:1), else 16:9; on a Mac the shape of the screen the game opens on (a MacBook Pro's 1.55:1, past its camera housing in fullscreen), 16:9 on a 16:9 display; `1.43` the iPhone Duo's shape, `0` 16:9 |
 | Resolution | `DM_OUTPUT_RES` | `native` the pixel size of the screen the game opens on, `0` 1920 wide (the docked Switch's) |
 | Frame-rate counter | `DM_SHOW_FPS` | `1`, `0` |

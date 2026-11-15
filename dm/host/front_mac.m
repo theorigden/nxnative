@@ -37,6 +37,7 @@ static void merge_rumble_to(void (*sink)(const dm_haptic_state *));
 #include "button_icons.h"
 #include <stdatomic.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <math.h>
 #include <sys/stat.h>
 
@@ -78,8 +79,36 @@ int front_display_panel_pixels(int *w, int *h) {
 }
 static _Atomic int g_screen_variable_refresh;
 int front_screen_variable_refresh(void) { return g_screen_variable_refresh; }
+// HDR (DM_HDR=1; the settings window's HDR): on a screen with EDR headroom (maximumPotentialExtendedDynamicRangeColorComponentValue above 1: an XDR or HDR display) the game layer
+// takes half floats in extended linear sRGB, where 1.0 is SDR white and the screen shows values up to its current headroom (front_edr_headroom); nvn_mtl.m's tone map maps the
+// scene up to it and the present writes linear values (nvn_hdr.inc). Elsewhere, and when the window moves to a screen without EDR, the layer is BGRA8Unorm as without HDR.
+// The current headroom follows the brightness and what else is on screen, so it is read again every half second. Main thread
+static int g_hdr_want = -1, g_layer_edr; static _Atomic float g_edr_headroom;
+float front_edr_headroom(void) { return atomic_load(&g_edr_headroom); }
+static void hdr_apply(NSScreen *screen) {
+    if (g_hdr_want < 0) { const char *e = getenv("DM_HDR"); g_hdr_want = e && atoi(e) == 1; }
+    if (!g_hdr_want || !g_layer || !screen) return;
+    double pot = screen.maximumPotentialExtendedDynamicRangeColorComponentValue, cur = screen.maximumExtendedDynamicRangeColorComponentValue;
+    static double test_h = -1; if (test_h < 0) { const char *e = getenv("DM_HDR_HEADROOM"); test_h = e ? atof(e) : 0; if (test_h > 1) LOG("front end: HDR: DM_HDR_HEADROOM=%g: every screen taken to have that EDR headroom (test)", test_h); }
+    if (test_h > 1) pot = cur = test_h;   // a screen without EDR shows values above 1 as 1, but the path to the drawable is the same
+    int edr = pot > 1.0;
+    if (edr != g_layer_edr) {
+        g_layer_edr = edr;
+        if (edr) {
+            CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+            g_layer.pixelFormat = MTLPixelFormatRGBA16Float; g_layer.colorspace = cs; g_layer.wantsExtendedDynamicRangeContent = YES;
+            CGColorSpaceRelease(cs);
+        } else { g_layer.wantsExtendedDynamicRangeContent = NO; g_layer.colorspace = NULL; g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm; }
+        if (getenv("DM_HDR_PROBE")) g_layer.framebufferOnly = NO;   // nvn_hdr.inc reads the drawable back
+        LOG("front end: HDR: %s (screen %u: EDR headroom %.2f now, %.2f potential)", edr ? "the game layer is RGBA16Float in extended linear sRGB with EDR" : "this screen has no EDR headroom: the layer stays BGRA8Unorm (SDR)",
+            [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue], cur, pot);
+    }
+    float h = edr ? (float)fmax(1.0, cur) : 0.0f, old = atomic_exchange(&g_edr_headroom, h);
+    if (fabsf(old - h) > 0.25f) LOG("front end: HDR: EDR headroom %.2f (potential %.2f)", h, pot);
+}
 static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabilities of the current screen and mode, including a mode change without moving the window
     if (!screen) return;
+    hdr_apply(screen);
     g_screen_fps = (int)screen.maximumFramesPerSecond;
     g_screen_id = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
     g_screen_variable_refresh = screen.minimumRefreshInterval > 0 && screen.maximumRefreshInterval > screen.minimumRefreshInterval;
@@ -1747,6 +1776,7 @@ void front_run(void (*guest)(void)) {
         [win makeKeyAndOrderFront:nil];
         screen_refresh(win.screen ?: NSScreen.mainScreen);
         g_win = win;
+        if (g_hdr_want == 1) [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; hdr_apply(g_win.screen); }];   // the headroom follows the brightness
         [NSApp activateIgnoringOtherApps:YES];
         // A host another process starts (scripts/regress.py) is not activated (its focus state stays 2), so its window opened wherever it landed in the window order, and behind
         // another app's window macOS fires its display link about once a second: Breath of the Wild stepped up to 3 vsyncs at boot and never came back (20 fps runs).

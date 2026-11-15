@@ -49,6 +49,12 @@ tex_dirty_upload	on
 fps_target	60
 screen_aspect	on
 output_size	on
+# The host's tone map and HDR (docs/reference/rendering.md, "Tone map and HDR by the host"; the game note's Tone map and HDR): agl's tone map pass (AglShader.sharcb), drawn by the
+# host's tonemap_agl.metal (DM_TONEMAP game / agx / aces); FSR 1's EASU, which carries the tone-mapped scene into the final image before the HUD (its output scaled by the HDR
+# headroom); the copy of the final image (R11G11B10F, the HUD in it) into the RGBA8 window texture, which HDR presents from a copy of its own (DM_HDR, Mac)
+tonemap_agl	0ac9a54938974396
+hdr_expand	ac58fc18eda5f387
+hdr_final	dd3d1e0ebf732428
 
 # ---- Shader split (shader_split.py) ----
 shader_groups	/Shader/ApplicationPackage=layout /Shader/=shader /Effect/=effect /UI/=layout
