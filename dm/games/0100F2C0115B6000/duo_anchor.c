@@ -1,8 +1,9 @@
 // A screen taller than 16:9 (DM_SCREEN_ASPECT, Tears of the Kingdom 1.4.3): the HUD at the taller layout's edges. nn::ui2d's Pane: parent +0x18, child list +0x20 (first
 // child at +0x28), translation +0x30, size +0x50, flags +0x58, global matrix 3x4 row-major +0x70 (scale +0x70 / +0x84, translation +0x7c / +0x8c).
 // duo_calc runs from Pane::Calculate (main+0x593060) right after a pane's global matrix has been computed (the call to main+0x10d7538 returns to main+0x593110) and before
-// its children's are, so what it does to a pane's matrix its children and text follow. The library recomputes a global matrix only when the pane or a parent changed, so a
-// shift is added once per computation:
+// its children's are, so what it does to a pane's matrix its children and text follow; and from Pane::CalculateGlobalMatrix (main+0x10d8130, the game's pass over whole
+// layouts before Calculate, which clears the dirty bit, so a pane it reaches first is not computed again in Calculate) after its call. The library recomputes a global
+// matrix only when the pane or a parent changed, so a shift is added once per computation:
 // - a full-screen background (a leaf that draws, as wide and as tall as its layout, centred) is stretched to the taller screen;
 // - a widget at the layout's top or bottom edge moves out by the extra half-height with everything in it, so it sits at the screen's edge again; at the top it stops
 //   short of a camera housing's row by the HUD's top inset (state +0x64, written by the Mac front end while the picture fills that row), so the HUD stays below it.

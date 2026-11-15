@@ -143,7 +143,8 @@ def stub(ctx, step, read1, read2, fade, swap, view):
 # docked crop of 1920x1080 becomes the output's size. Handheld (1280x720) keeps its crop: the screen shape is for docked mode. x16 is free in nnMain; main+0x3de5b8 is in a leaf.
 # The field of view and the HUD's projection: sead::PerspectiveProjection is laid out as in Breath of the Wild 1.9.0 and its setFovy_, constructor, set() and doUpdateMatrix
 # match it instruction for instruction at the sites, so its stub bodies are used as they are (01007EF00011E000/patches.py, which describes them; state +0x58.. and the
-# ring of fovys at +0xfc..). The HUD at the taller edges: duo_anchor.c from nn::ui2d::Pane::Calculate (main+0x593110)
+# ring of fovys at +0xfc..). The HUD at the taller edges: duo_anchor.c after each pane's global matrix, from nn::ui2d::Pane::Calculate (main+0x593110) and
+# Pane::CalculateGlobalMatrix (main+0x10d8130)
 _duo_anchor = 'bd4000201e20200854000041d65f03c0f9400c08b4ffffc852800609aa0803eaf9400d4bb400008baa0b03ea7100052954ffff81bd40554152a88f491e2701221e2220201e2e10011e2f10021e21ac41bd4070022d4a14031e2208641e2288621e2020881e244c44bd4084031e2308a21e2388a51e2020481e224ca5f94014099100800abd4010221e2208221e222080540003cbbd4014261e2608261e2620a05400034bbd4018261e2608261e2620a0540002c8bd407c061e20c0c652a8440b1e2701671e2708271e2720c0540001e5bd408c061e20c0d01e27220054000165eb0a013f54fff941f9400008f9407108eb02011f54fff8c0bd400420bd4080011e2108001400001ceb0a013f540004c1bd4014261e2608261e2620a05400044b52a886891e2701261e260826bd4004271e3010101f0740c61e2620a054000345bd408c061e20c0d052a844091e2701311e3108311e31220054000265f9400009f9407129eb02013f540001e0bd4080001e2008e0bd008000bd4004201e200860bd008400bd400420bd4088011e210800bd008800bd4004201e2008c0bd008c00d65f03c01e222080540000abbd4014231e2308231e2320a054fff2aaf9400009f940712952a8500a1e2701431e230823eb02013f540000811e2320801e2354a854fff1645280060914000004aa0a03e87100052954000440f9400d0ab400034abd4071042d4a19051e2408a71e2488a41e2020e81e274c84bd4085051e2508c71e2588c51e2020e81e274ca51e222080540000abbd4014261e2608261e2620a054fffd6af9400108f9407108eb02011f54ffede11e2320801e2354a854fffc8417ffff6b2d460d021e2308631f020c421e2a10031e23204054ffecacbd408c021e20c043bd4008241e2408241e24206054ffebebbc5e40231e2028041e2420606f00e4041e2444641e24cc631e2338031e2140001e2020481e20cc601e2008201e202840bd008c00d65f03c0'
 _duo_calc = 0x0
 _pane_draw_self = 0x10d7f98   # nn::ui2d::Pane::DrawSelf (vtable main+0x357f280 slot 28, empty)
@@ -267,6 +268,26 @@ def screen_shape(ctx):
     emit(0x39416268)   # orig: ldrb w8, [x19, #0x58]
     emit(B(here(), 0x593114))
     fs_put(0x593110, [B(0x593110, start)], 'nn::ui2d::Pane::Calculate after the global matrix: duo_calc (the HUD at the taller screen\'s edges, below a camera housing\'s row)')
+    # The library's other caller of CalculateGlobalMatrix (main+0x10d7538): Pane::CalculateGlobalMatrix(DrawInfo, force) (main+0x10d8130), recursive over a pane's children,
+    # which the game runs over whole layouts (Layout::CalculateGlobalMatrix main+0x872fec, a capture's update main+0x10e740c) before Calculate. It clears the pane's dirty bit,
+    # so a pane it reaches first never takes the matrix through main+0x593110: the save list's blurred capture (P_Capture_00), the fades and the cutscene bars kept
+    # the 16:9 band (probed on the Mac: none of the 1920-wide panes passed main+0x593110). Its call becomes one to a stub that calls it and then duo_calc on the pane (x20)
+    fs_site(0x10d816c, 'f3fcff97')
+    start = here()
+    emit(STP_PRE(29, 30, 31, -16))
+    emit(_bl(here(), 0x10d7538))
+    emit(ADRP(16, here(), STATE))
+    emit(0xb9405611)   # ldr w17, [x16, #0x54]   sites
+    emit(0x36400111)   # tbz w17, #8, out (+8)   bit 8: the HUD anchoring
+    emit(0xb9404a11)   # ldr w17, [x16, #0x48]   the output's height (0 = 16:9)
+    emit(0x340000d1)   # cbz w17, out (+6)
+    emit(0xaa1403e0)   # mov x0, x20
+    emit(0x91020201)   # add x1, x16, #0x80
+    emit(ADRP(2, here(), _pane_draw_self)); emit(0x91000042 | ((_pane_draw_self & 0xFFF) << 10))
+    emit(_bl(here(), code + _duo_calc))
+    emit(0xa8c17bfd)   # out: ldp x29, x30, [sp], #16
+    emit(0xd65f03c0)   # ret
+    fs_put(0x10d816c, [_bl(0x10d816c, start)], 'nn::ui2d::Pane::CalculateGlobalMatrix (whole layouts, before Calculate): duo_calc after each pane\'s matrix')
 
 # Build 1.4.3 (277178b7…): the matched frame step at the functions it was checked on (MATCH_FRAME_STEP's comment), then the screen-shape stubs, whose sites are
 # this build's fixed addresses (no function-matched form yet)
@@ -304,6 +325,6 @@ BINDING = [
             'Splatoon 2 / 3, Kirby, Mario Party, Ocarina, Smash, Metroid Dread, Origami King: no exact match, 2026-11-09)',
      'checked': '1.4.3 main: one function of each fingerprint; the rule rewrites it byte-identical to its former build entry (2026-11-09)'},
     {'what': 'screen shape and output size', 'now': 'build', 'goal': 'game', 'purpose': 'rendering',
-     'why': "the display size, layout size, crop, final image and HUD projection in nnMain, agl and the display objects, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate",
+     'why': "the display size, layout size, crop, final image and HUD projection in nnMain, agl and the display objects, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate / CalculateGlobalMatrix",
      'blocked': 'no function-matched form yet: build 1.4.3 only (FRAME_STEP)'},
 ]
