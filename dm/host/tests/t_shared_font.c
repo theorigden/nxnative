@@ -58,6 +58,43 @@ static void put(const char *dir, const char *file, const char *text) {
     char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, file);
     FILE *f = fopen(p, "wb"); if (f) { fputs(text, f); fclose(f); }
 }
+// A font of the game's own with only a name table: full name (ID 4) "Ext rnal" in a Windows record (UTF-16BE), mac: in a Mac Roman one instead
+static size_t sfnt_named(uint8_t *b, int mac) {
+    const char *nm = "Ext rnal"; size_t sl = mac ? 8 : 16;
+    memset(b, 0, 128);
+    b[1] = 1; b[5] = 1;                                                   // version 1.0, one table
+    memcpy(b + 12, "name", 4); b[12 + 11] = 28; b[12 + 15] = (uint8_t)(18 + sl);   // its offset and length
+    uint8_t *t = b + 28; t[3] = 1; t[5] = 18;                             // format 0, one record, strings at +18
+    t[7] = mac ? 1 : 3; t[9] = mac ? 0 : 1; t[13] = 4; t[15] = (uint8_t)sl;   // platform, encoding, name ID 4, length, offset 0
+    for (int i = 0; i < 8; i++) { if (mac) t[18 + i] = (uint8_t)nm[i]; else t[18 + 2 * i + 1] = (uint8_t)nm[i]; }
+    return 28 + 18 + sl;
+}
+// Button icons (button_icons.h): the style for DM_BUTTON_ICONS and the controller, the variant for DM_PAD_FACE, its file names, and in a child (the variant is decided once) the fonts a
+// variant serves: the extension font's own file of that variant, and a game's icon font, found by its full name, from its restyled copy
+static int button_icons(const char *dir) {
+    int bad = 0;
+    bad += bi_style(NULL, PAD_KIND_XBOX) != BI_XBOX || bi_style("auto", PAD_KIND_PLAYSTATION) != BI_PLAYSTATION || bi_style("", PAD_KIND_OTHER) != BI_SWITCH;
+    bad += bi_style("auto", PAD_KIND_NONE) != BI_SWITCH || bi_style("auto", PAD_KIND_LOOKING) != BI_SWITCH || bi_style("switch", PAD_KIND_XBOX) != BI_SWITCH;
+    bad += bi_style("xbox", PAD_KIND_PLAYSTATION) != BI_XBOX || bi_style("playstation", PAD_KIND_NONE) != BI_PLAYSTATION;
+    bad += bi_variant(BI_SWITCH, 1) != NULL || strcmp(bi_variant(BI_XBOX, 0), "xbox") || strcmp(bi_variant(BI_XBOX, 1), "xbox_label") || strcmp(bi_variant(BI_PLAYSTATION, 1), "playstation_label");
+    char f[64]; bi_file(f, sizeof f, "nintendo_ext.ttf", "xbox"); bad += strcmp(f, "nintendo_ext_xbox.ttf") != 0;
+    bi_file(f, sizeof f, "nintendo_ext.ttf", NULL); bad += strcmp(f, "nintendo_ext.ttf") != 0;
+    uint8_t font[128]; char nm[16];
+    for (int mac = 0; mac < 2; mac++) { sfnt_named(font, mac); bad += !bi_font_name(font, sizeof font, nm, sizeof nm) || strcmp(nm, "Ext_rnal"); }
+    font[0] = 'X'; bad += bi_font_name(font, sizeof font, nm, sizeof nm);   // not a font
+    if (bad) { fprintf(stderr, "button icons: style, variant, file or font name\n"); return bad; }
+    pid_t child = fork();
+    if (child) { int s = 0; waitpid(child, &s, 0); return WIFEXITED(s) ? WEXITSTATUS(s) : 99; }
+    setenv("DM_FONT_DIR", dir, 1); unsetenv("DM_SHARED_FONT_EXT"); unsetenv("DM_SHARED_FONT"); setenv("DM_BUTTON_ICONS", "xbox", 1); setenv("DM_PAD_FACE", "label", 1);
+    bad += !dm_button_icons_variant() || strcmp(dm_button_icons_variant(), "xbox_label");
+    font_t e = font_get(5); bad += !e.p || memcmp(e.p + 8, "xbx", 3);
+    uint8_t game[128], other[128]; sfnt_named(game, 0); sfnt_named(other, 0);
+    for (int k = 0; k < 20; k++) { other[28 + 18 + 1] = (uint8_t)('f' + k); bad += icon_font_swap(other) != other; }   // the game's other fonts, before its icon font (Tears of the Kingdom: 9)
+    const uint8_t *r = icon_font_swap(game); bad += r == game || memcmp(r, "gam", 3);
+    bad += icon_font_swap(game) != r;                                      // mapped once
+    bad += icon_font_swap(other) != other || icon_font_swap(e.p + 8) != e.p + 8 || icon_font_swap("not a font") == NULL;
+    _exit(bad);
+}
 int main(void) {
     char dir[] = "/tmp/t_shared_font.XXXXXX";
     if (mkdtemp(dir)) {
@@ -65,8 +102,10 @@ int main(void) {
         char one[1100]; snprintf(one, sizeof one, "%s/one.ttf", dir); put(dir, "one.ttf", "one");
         CHECK(fonts_from_folder(dir, NULL) == 0, "a type's own file, else the standard font");
         CHECK(fonts_from_folder(dir, one) == 0, "DM_SHARED_FONT: one font for types 0-4, the extension font still its own");
-        const char *files[] = {"standard.ttf", "korean.ttf", "nintendo_ext.ttf", "one.ttf"};
-        for (unsigned i = 0; i < 4; i++) { char p[1100]; snprintf(p, sizeof p, "%s/%s", dir, files[i]); unlink(p); }
+        put(dir, "nintendo_ext_xbox_label.ttf", "xbx"); put(dir, "game_Ext_rnal_xbox_label.ttf", "gam");
+        CHECK(button_icons(dir) == 0, "button icons: the style's extension font and a game's restyled icon font");
+        const char *files[] = {"standard.ttf", "korean.ttf", "nintendo_ext.ttf", "one.ttf", "nintendo_ext_xbox_label.ttf", "game_Ext_rnal_xbox_label.ttf"};
+        for (unsigned i = 0; i < 6; i++) { char p[1100]; snprintf(p, sizeof p, "%s/%s", dir, files[i]); unlink(p); }
         rmdir(dir);
     } else CHECK(0, "temporary font folder");
     unsigned long bytes = 0;

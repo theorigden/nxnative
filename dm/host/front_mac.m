@@ -1,12 +1,13 @@
 // Mac front end: with DM_WINDOW=1 open a window (CAMetalLayer, for the graphics backend to present frames) + keyboard and controllers → dm_input; the guest runs on a large-stack thread instead and the main thread belongs to AppKit.
 // Without DM_WINDOW: the guest runs directly on the current thread, behaving the same as with no front end (windowless tests use this).
-// The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN=1 starts it that way. ⌘Q quits, and so does a controller's Home button held for 2 s and
+// The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN=1 starts it that way. On a screen with a camera housing fullscreen covers the whole screen,
+// the row beside the housing included (fs_whole_enter). ⌘Q quits, and so does a controller's Home button held for 2 s and
 // confirmed with A (home_quit.h); the left mouse button is the touchscreen.
 // Cheats (hle_cheats.c): the Cheats menu's rows toggle, reload (⌘R) and open the cheats folder; its first item "Show Cheats
 // Window" (⌘⇧C, or DM_CHEATS_WINDOW=1 at launch) opens a Cheats panel beside the game: sections, search, the master switch,
 // safe mode, values, details and the import of cheat files (see the code below).
 // Key map (Nintendo layout): WASD left stick, arrow keys D-pad (with Shift held: the right stick, for the camera), J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−, Space=shake the controller.
-// Controllers: face buttons as on the iPhone, by position (right A, bottom B, top X, left Y) or on a Nintendo pad by its labels (pad_apple.h), shoulders L R, triggers ZL ZR, Menu + Options −, both sticks and their presses.
+// Controllers: face buttons as on the iPhone, by position (right A, bottom B, top X, left Y) or on a Nintendo pad by its labels, every pad by its labels with DM_PAD_FACE=label (pad_apple.h), shoulders L R, triggers ZL ZR, Menu + Options −, both sticks and their presses.
 // Each controller is a player of its own (local co-op): the first one connected is player 1, together with the keyboard, the next player 2, and so on up to 8 (pad_slots.h);
 // DM_PAD_MERGE=1 merges every controller into player 1 instead, DM_KBD_PLAYER=own makes the keyboard player 1 on its own, with the controllers from player 2 on.
 #import <Cocoa/Cocoa.h>
@@ -31,8 +32,12 @@ static void (*g_merge_sink)(const dm_haptic_state *);   // DM_PAD_MERGE: where p
 static void merge_rumble_to(void (*sink)(const dm_haptic_state *));
 #include "home_quit.h"
 #include "home_quit_mac.h"
+#include "save_sync.h"
 #include "ctrl_prompt.h"
+#include "button_icons.h"
+#include <stdatomic.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <math.h>
 #include <sys/stat.h>
 
@@ -52,10 +57,58 @@ int front_display_pixels(int *w, int *h) {
     if (a <= 0 || b <= 0) return 0;
     *w = a; *h = b; return 1;
 }
+// The display's own panel in pixels, no larger than the current mode's pixels (front.h): a scaled mode's backing store can be larger than the panel (a 3:2 MateView at "looks like
+// 2560x1707" draws 5120x3414 for a 3840x2560 panel; macOS scales it down), and a picture rendered past the panel's pixels is only scaled down again. The panel is the mode
+// macOS flags native (kDisplayModeNativeFlag), else the mode with the most pixels. A 16" MacBook Pro's default mode is its panel, 3456x2234
+int front_display_panel_pixels(int *w, int *h) {
+    int cw, ch; if (!front_display_pixels(&cw, &ch)) return 0;
+    CGDirectDisplayID id = g_screen_id ? g_screen_id : CGMainDisplayID();
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(id, (__bridge CFDictionaryRef)@{(__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES});
+    int nw = 0, nh = 0, bw = 0, bh = 0;
+    for (CFIndex i = 0; modes && i < CFArrayGetCount(modes); i++) {
+        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        int pw = (int)CGDisplayModeGetPixelWidth(m), ph = (int)CGDisplayModeGetPixelHeight(m);
+        if (CGDisplayModeGetIOFlags(m) & 0x02000000 /* kDisplayModeNativeFlag */) { if (pw * ph > nw * nh) { nw = pw; nh = ph; } }
+        if (pw * ph > bw * bh) { bw = pw; bh = ph; }
+    }
+    if (modes) CFRelease(modes);
+    if (!nw) { nw = bw; nh = bh; }
+    *w = cw; *h = ch;
+    if (nw > 0 && nh > 0 && nw * nh < cw * ch) { *w = nw; *h = nh; }
+    return 1;
+}
 static _Atomic int g_screen_variable_refresh;
 int front_screen_variable_refresh(void) { return g_screen_variable_refresh; }
+// HDR (DM_HDR=1; the settings window's HDR): on a screen with EDR headroom (maximumPotentialExtendedDynamicRangeColorComponentValue above 1: an XDR or HDR display) the game layer
+// takes half floats in extended linear sRGB, where 1.0 is SDR white and the screen shows values up to its current headroom (front_edr_headroom); nvn_mtl.m's tone map maps the
+// scene up to it and the present writes linear values (nvn_hdr.inc). Elsewhere, and when the window moves to a screen without EDR, the layer is BGRA8Unorm as without HDR.
+// The current headroom follows the brightness and what else is on screen, so it is read again every half second. Main thread
+static int g_hdr_want = -1, g_layer_edr; static _Atomic float g_edr_headroom;
+float front_edr_headroom(void) { return atomic_load(&g_edr_headroom); }
+static void hdr_apply(NSScreen *screen) {
+    if (g_hdr_want < 0) { const char *e = getenv("DM_HDR"); g_hdr_want = e && atoi(e) == 1; }
+    if (!g_hdr_want || !g_layer || !screen) return;
+    double pot = screen.maximumPotentialExtendedDynamicRangeColorComponentValue, cur = screen.maximumExtendedDynamicRangeColorComponentValue;
+    static double test_h = -1; if (test_h < 0) { const char *e = getenv("DM_HDR_HEADROOM"); test_h = e ? atof(e) : 0; if (test_h > 1) LOG("front end: HDR: DM_HDR_HEADROOM=%g: every screen taken to have that EDR headroom (test)", test_h); }
+    if (test_h > 1) pot = cur = test_h;   // a screen without EDR shows values above 1 as 1, but the path to the drawable is the same
+    int edr = pot > 1.0;
+    if (edr != g_layer_edr) {
+        g_layer_edr = edr;
+        if (edr) {
+            CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+            g_layer.pixelFormat = MTLPixelFormatRGBA16Float; g_layer.colorspace = cs; g_layer.wantsExtendedDynamicRangeContent = YES;
+            CGColorSpaceRelease(cs);
+        } else { g_layer.wantsExtendedDynamicRangeContent = NO; g_layer.colorspace = NULL; g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm; }
+        if (getenv("DM_HDR_PROBE")) g_layer.framebufferOnly = NO;   // nvn_hdr.inc reads the drawable back
+        LOG("front end: HDR: %s (screen %u: EDR headroom %.2f now, %.2f potential)", edr ? "the game layer is RGBA16Float in extended linear sRGB with EDR" : "this screen has no EDR headroom: the layer stays BGRA8Unorm (SDR)",
+            [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue], cur, pot);
+    }
+    float h = edr ? (float)fmax(1.0, cur) : 0.0f, old = atomic_exchange(&g_edr_headroom, h);
+    if (fabsf(old - h) > 0.25f) LOG("front end: HDR: EDR headroom %.2f (potential %.2f)", h, pot);
+}
 static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabilities of the current screen and mode, including a mode change without moving the window
     if (!screen) return;
+    hdr_apply(screen);
     g_screen_fps = (int)screen.maximumFramesPerSecond;
     g_screen_id = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
     g_screen_variable_refresh = screen.minimumRefreshInterval > 0 && screen.maximumRefreshInterval > screen.minimumRefreshInterval;
@@ -75,6 +128,8 @@ int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency:
 // 1 → 2 → 3 vsync steps at latency 1, issue #347), and the fixed 60 Hz mode held 60.0 fps at latency 1 (docs/reference/frame-rate.md). A screen with no such mode keeps its rate, and
 // the 120 Hz link paces it (nvn_mtl.m link_vrr_120)
 static NSWindow *g_win; static _Atomic int g_match_want;   // the game's window; the frame rate to match (0 = not known yet), written by the present thread only
+static int g_fs_whole;   // main thread: the window covers the whole screen of a Mac with a camera housing (fs_whole_enter, below)
+static int win_fullscreen(NSWindow *w) { return g_fs_whole || (w.styleMask & NSWindowStyleMaskFullScreen) != 0; }   // either fullscreen
 static CGDirectDisplayID g_match_id; static CGDisplayModeRef g_match_orig; static int g_match_orig_vrr;   // main thread: the screen this host switched, its own mode (NULL = none switched) and whether that mode is variable-refresh
 static double mode_hz(CGDisplayModeRef m) { double hz = CGDisplayModeGetRefreshRate(m); return hz > 0 ? hz : 0; }   // 0 = not known (older built-in screens report none)
 static int hz_multiple(double hz, int fps) { double k = round(hz / fps); return k >= 1 && fabs(hz / fps - k) < 0.01; }   // 59.94 Hz counts as 60
@@ -93,7 +148,7 @@ static void screen_match_restore(int on_it) {   // main thread: the screen this 
 }
 static void screen_match_apply(void) {   // main thread: on a new frame rate, on entering and leaving fullscreen and on a move to another screen
     static int off = -1; if (off < 0) { const char *e = getenv("DM_SCREEN_MATCH"); off = e && !strcmp(e, "0"); if (off) LOG("front end: the screen keeps its refresh rate in fullscreen too (DM_SCREEN_MATCH=0)"); }
-    NSScreen *scr = g_win.screen; int want = g_match_want, full = (g_win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    NSScreen *scr = g_win.screen; int want = g_match_want, full = win_fullscreen(g_win);
     CGDirectDisplayID id = scr ? [scr.deviceDescription[@"NSScreenNumber"] unsignedIntValue] : kCGNullDirectDisplay;
     if (g_match_orig && (!full || id != g_match_id)) screen_match_restore(id == g_match_id);
     if (off || !full || want <= 0 || !scr) return;
@@ -134,6 +189,45 @@ static void screen_match_apply(void) {   // main thread: on a new frame rate, on
 void front_screen_match(int fps) {
     if (!g_layer || g_match_want == fps) return;   // no window (a windowless run's main thread runs the guest), or the rate as before
     g_match_want = fps; dispatch_async(dispatch_get_main_queue(), ^{ screen_match_apply(); });
+}
+
+// Fullscreen over the whole screen of a Mac with a camera housing (the notch). macOS's own fullscreen keeps a window below the housing's row: on a 16" M1 Max it stays
+// 1728x1084 of the screen's 1728x1117 points, even when -window:willUseFullScreenContentSize: or -constrainFrameRect:toScreen: ask for the whole screen, and the row
+// beside the housing stays black. On such a screen the window instead goes borderless over the whole screen, the menu bar and the Dock hiding until the pointer
+// reaches them, as in macOS's own fullscreen (only with DM_FULLSCREEN_NOTCH=1; macOS's own by default). The green button, ⌃⌘F and DM_FULLSCREEN all reach it through
+// -toggleFullScreen: (DmGameWindow). A picture of the screen's own shape (DM_SCREEN_ASPECT=auto on a profile with screen_aspect) fills the whole screen, the row beside
+// the housing too, and the game keeps its HUD below that row (state +0x64, hud_inset_update). Any other picture is not drawn behind the housing: DmGameView fits it to
+// the whole screen when the black bars around it are at least as tall as the housing's row (a 16:9 game on the 16:10 screen), and below the row otherwise.
+static NSRect g_fs_saved; static NSWindowStyleMask g_fs_saved_style;   // the window's frame and style before, which leaving puts back
+static int fs_whole_wanted(NSScreen *s) {   // fullscreen on this screen covers the whole of it: it has a housing, and DM_FULLSCREEN_NOTCH=1 asks for it
+    // (macOS's own fullscreen by default: the player preferred a true fullscreen Space, the housing's row left black, to the borderless window over the whole screen)
+    static int off = -1; if (off < 0) { const char *e = getenv("DM_FULLSCREEN_NOTCH"); off = !(e && strcmp(e, "0")); }
+    return !off && s && s.safeAreaInsets.top > 0;
+}
+static void fs_entered(NSWindow *w) { screen_refresh(w.screen); g_fullscreen = 1; g_layer.contentsScale = w.backingScaleFactor; screen_match_apply(); }
+static void fs_left(NSWindow *w) { g_fullscreen = 0; screen_refresh(w.screen); g_layer.contentsScale = w.backingScaleFactor; screen_match_apply(); }
+static void fs_whole_enter(NSWindow *w) {
+    NSScreen *s = w.screen;
+    g_fs_saved = w.frame; g_fs_saved_style = w.styleMask;
+    w.styleMask = NSWindowStyleMaskBorderless;
+    NSApp.presentationOptions = NSApplicationPresentationAutoHideDock | NSApplicationPresentationAutoHideMenuBar;   // applies while the app is active; another app gets its menu bar back
+    g_layer.contentsGravity = kCAGravityBottom;   // a drawable of the part below the housing's row (DmGameView pictureArea) stays there; the row shows the layer's black background
+    g_fs_whole = 1;
+    [w setFrame:s.frame display:YES];
+    [w makeKeyAndOrderFront:nil];
+    LOG("front end: fullscreen over the whole screen, %.0fx%.0f points, the housing's row %.0f (DM_FULLSCREEN_NOTCH=0 keeps macOS's fullscreen below it)",
+        s.frame.size.width, s.frame.size.height, s.safeAreaInsets.top);
+    fs_entered(w);
+}
+static void fs_whole_leave(NSWindow *w) {
+    NSApp.presentationOptions = NSApplicationPresentationDefault;
+    g_layer.contentsGravity = kCAGravityResize;   // CALayer's default, as a window had it
+    g_fs_whole = 0;
+    w.styleMask = g_fs_saved_style;
+    [w setFrame:g_fs_saved display:YES];
+    [w makeKeyAndOrderFront:nil];
+    LOG("front end: fullscreen left");
+    fs_left(w);
 }
 // The pointer hides on game input while it is over the picture of the active game window (issue #675): AppKit shows it again when the mouse moves, input_release when
 // the window loses focus. The title bar, other windows and other apps keep theirs; the mouse is the touch screen (DmGameView), and moving it shows the pointer
@@ -211,7 +305,7 @@ static void pad_read(GCExtendedGamepad *g) {
     hq_poll(); if (hq_blocks_input(g_hq.phase)) return;
     int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller);
     if (p < 0 && (!g_press_to_join || pad_gc_unread(g.controller))) return;   // a controller read from its HID reports: GameController's controller of it stays unread
-    uint64_t m = dm_pad_face(g);   // by position, a Nintendo pad by its labels
+    uint64_t m = dm_pad_face(g);   // by position, a Nintendo pad by its labels (every pad by its labels with DM_PAD_FACE=label)
     #define K(btn, bit) if (btn.isPressed) m |= bit
     K(g.leftShoulder, DM_BTN_L); K(g.rightShoulder, DM_BTN_R); K(g.leftTrigger, DM_BTN_ZL); K(g.rightTrigger, DM_BTN_ZR);
     K(g.buttonMenu, DM_BTN_PLUS); K(g.buttonOptions, DM_BTN_MINUS); K(g.leftThumbstickButton, DM_BTN_LS); K(g.rightThumbstickButton, DM_BTN_RS);   // nil on pads without them: not pressed
@@ -259,8 +353,37 @@ static int merge_pads_left(GCController *gone) {
     for (GCController *c in GCController.controllers) if (c.extendedGamepad && c != gone) return 1;
     return 0;
 }
+// The kind of controller the player uses, for the button icons (front_pad_kind, front.h; button_icons.h): player 1's controller, else the first one connected, as pads_changed last saw them.
+// GameController's Xbox and PlayStation profiles (GCXboxGamepad, GCDualSenseGamepad, GCDualShockGamepad), else the product category; a raw HID, Joy-Con or Switch 2 pad is another kind
+static _Atomic int g_pad_kind = PAD_KIND_NONE;
+static _Atomic uint64_t g_pad_watch_ns;   // when pads_start began watching (0: not yet)
+static int pad_kind_of(GCController *c) {
+    GCExtendedGamepad *g = c.extendedGamepad; NSString *k = c.productCategory ?: @"";
+    if ([g isKindOfClass:GCXboxGamepad.class] || [k containsString:@"Xbox"]) return PAD_KIND_XBOX;
+    if ([g isKindOfClass:GCDualSenseGamepad.class] || [g isKindOfClass:GCDualShockGamepad.class] || [k containsString:@"DualSense"] || [k containsString:@"DualShock"]) return PAD_KIND_PLAYSTATION;
+    return PAD_KIND_OTHER;
+}
+static void pad_kind_update(GCController *gone) {
+    int k = PAD_KIND_NONE; const char *name = NULL;
+    if (!g_merge && g_held[0] && g_held[0] != gone) { k = pad_kind_of(g_held[0]); name = pad_name(g_held[0]); }
+    else for (GCController *c in GCController.controllers) if (c != gone && c.extendedGamepad) { k = pad_kind_of(c); name = pad_name(c); break; }
+    if (k == PAD_KIND_NONE && (g_hidpads || g_jc1_pads || dm_switch2_pads())) k = PAD_KIND_OTHER;
+    if (atomic_exchange(&g_pad_kind, k) != k && k != PAD_KIND_NONE) LOG("front end: player 1's controller for the button icons: %s (%s)", name ?: "a Nintendo pad", k == PAD_KIND_XBOX ? "Xbox" : k == PAD_KIND_PLAYSTATION ? "PlayStation" : "another kind");
+}
+int front_pad_kind(void) {
+    if (!getenv("DM_WINDOW")) return PAD_KIND_NONE;   // no window: no controllers are read
+    int k = atomic_load(&g_pad_kind); uint64_t t0 = atomic_load(&g_pad_watch_ns);
+    if (k != PAD_KIND_NONE) return k;
+    // GameController tells of a controller connected at start shortly after the app starts watching: until 1.5 s after that, none may still be one coming
+    return !t0 || clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0 < 1500000000ull ? PAD_KIND_LOOKING : PAD_KIND_NONE;
+}
+static void pads_changed_body(GCController *gone);
 // Called at start and on every connect / disconnect (gone: the controller that was just removed, nil on a connect)
 static void pads_changed(GCController *gone) {
+    pads_changed_body(gone);
+    pad_kind_update(gone);
+}
+static void pads_changed_body(GCController *gone) {
     if (g_merge) {
         int any = 0;
         for (GCController *c in GCController.controllers) if (jc1_gc_unread(c)) pad_keep_system_buttons(c);   // read from HID (pad_jc1_mac.h), a lone Joy-Con's too (no extended gamepad profile)
@@ -647,6 +770,7 @@ int front_ctrl_support(int min, int max) {
     return g_cp_ok;
 }
 static void pads_start(void) {
+    atomic_store(&g_pad_watch_ns, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
     e = getenv("DM_KBD_PLAYER"); g_kbd_own = !g_merge && e && !strcmp(e, "own");
     e = getenv("DM_PAD_PRESS_TO_JOIN"); g_press_to_join = !g_merge && e && atoi(e);
@@ -669,17 +793,59 @@ static void pads_start(void) {
 // not a window-wide event monitor, so clicks on the title bar, the window buttons and the resize edges still reach AppKit.
 // The picture's width / height (front.h front_picture_shape; 16:9 until the first present), which the present fits into the view
 static _Atomic double g_picture_aspect = 16.0 / 9.0;
-void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = (double)w / h; }
-@interface DmGameView : NSView @end
+@interface DmGameView : NSView
+- (void)fitDrawable;
+@end
+void front_picture_shape(int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    g_picture_aspect = (double)w / h;
+    if (g_layer) dispatch_async(dispatch_get_main_queue(), ^{ NSView *v = g_win.contentView; if ([v isKindOfClass:DmGameView.class]) [(DmGameView *)v fitDrawable]; });   // the area it is fitted to may change
+}
+// The Mac's DM_SCREEN_ASPECT=auto (loader.c): the width / height of the screen the window opens on, as fullscreen shows it.
+// Called on the main thread before the window is up
+double front_screen_aspect_auto(void) {   // below a camera housing's row unless fullscreen covers it (DM_FULLSCREEN_NOTCH=1): the area macOS's own fullscreen shows
+    @autoreleasepool {
+        NSScreen *s = NSScreen.mainScreen ?: NSScreen.screens.firstObject; if (!s || s.frame.size.height <= 0) return 0;
+        CGFloat h = s.frame.size.height - (fs_whole_wanted(s) ? 0 : s.safeAreaInsets.top);
+        return h > 0 ? s.frame.size.width / h : 0;
+    }
+}
+extern uint8_t *dm_fps_state;   // loader.c: the frame step state page of a game with one
+// The picture fills the whole view, a camera housing's row included: over the whole screen (fs_whole_enter) with the screen's own shape (within 2%, as the present fills it:
+// nvn_mtl.m present_viewport)
+static int picture_fills_screen(NSRect b) {
+    return g_fs_whole && b.size.height > 0 && fabs(b.size.width / b.size.height / g_picture_aspect - 1) < 0.02;
+}
+// The HUD's top inset (state +0x64, float, layout units; read by the game's HUD anchoring, duo_anchor.c, each frame): the housing's row in the game's layout space while the
+// picture fills it, 0 otherwise. The layout height is +0x4c (0 = 16:9: no screen shape, nothing to write)
+static void hud_inset_update(NSView *v) {
+    if (!dm_fps_state) return;
+    uint32_t lh; memcpy(&lh, dm_fps_state + 0x4c, 4); if (!lh) return;
+    NSRect b = v.bounds; CGFloat top = v.window.screen.safeAreaInsets.top;
+    float in = picture_fills_screen(b) && top > 0 ? (float)(top / b.size.height * lh) : 0.0f, was; memcpy(&was, dm_fps_state + 0x64, 4);
+    if (in == was) return;
+    memcpy(dm_fps_state + 0x64, &in, 4);
+    LOG("front end: HUD top inset %.1f of the layout's %u (the camera housing's row of %.0f points)", in, lh, in > 0 ? top : 0);
+}
 @implementation DmGameView
+// The part of the view the present fits the picture into: all of it, but over the whole screen of a Mac with a camera housing (fs_whole_enter) only the part below the
+// housing's row when the picture fitted to all of it would reach into that row. The drawable is that part's size and the layer keeps it at its bottom (kCAGravityBottom);
+// the row above it shows the layer's black background
+- (NSRect)pictureArea {
+    NSRect b = self.bounds; CGFloat top = g_fs_whole ? self.window.screen.safeAreaInsets.top : 0;
+    if (top <= 0 || b.size.width <= 0 || b.size.height <= top || picture_fills_screen(b)) return b;   // a picture of the screen's shape fills the housing's row too
+    double fitted = fmin(b.size.height, b.size.width / g_picture_aspect);
+    if ((b.size.height - fitted) / 2 >= top) return b;   // the bar above the picture covers the housing's row
+    b.size.height -= top; return b;   // AppKit's origin is at the bottom left: the row is at the top
+}
 - (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
 - (void)mouseDragged:(NSEvent *)e {
     if (!g_input_on) return;
-    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSRect area = self.pictureArea; NSSize b = area.size;
     double w = b.width, h = b.height;
     if (w <= 0 || h <= 0) return;
-    double a = g_picture_aspect; if (w / h > a) w = h * a; else h = w / a;   // the centered picture the present fits into the view (16:9, or a taller one under DM_SCREEN_ASPECT)
-    double x0 = (b.width - w) / 2, y0 = (b.height - h) / 2;
+    double a = g_picture_aspect; if (w / h > a) w = h * a; else h = w / a;   // the centered picture the present fits into its area (16:9, or a taller one under DM_SCREEN_ASPECT)
+    double x0 = area.origin.x + (b.width - w) / 2, y0 = area.origin.y + (b.height - h) / 2;
     dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};   // The AppKit view origin is at bottom left, the touchscreen origin is at top left
     dm_touch_set(&t, 1); g_mouse_down = 1;
 }
@@ -688,12 +854,32 @@ void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = 
 // scaled down to it and up again by the compositor
 - (void)fitDrawable {
     CAMetalLayer *l = (CAMetalLayer *)self.layer; if (![l isKindOfClass:CAMetalLayer.class] || !self.window) return;
+    hud_inset_update(self);
     l.contentsScale = self.window.backingScaleFactor;
-    NSSize px = [self convertSizeToBacking:self.bounds.size]; if (px.width < 1 || px.height < 1 || CGSizeEqualToSize(l.drawableSize, px)) return;
+    NSSize px = [self convertSizeToBacking:self.pictureArea.size]; if (px.width < 1 || px.height < 1 || CGSizeEqualToSize(l.drawableSize, px)) return;
     l.drawableSize = px; LOG("front end: drawable %.0fx%.0f", px.width, px.height);
 }
 - (void)setFrameSize:(NSSize)s { [super setFrameSize:s]; [self fitDrawable]; }
 - (void)viewDidChangeBackingProperties { [super viewDidChangeBackingProperties]; [self fitDrawable]; }
+@end
+
+// The game's window: fullscreen requests (the green button, the Window menu's item, DM_FULLSCREEN) cover the whole screen of a Mac with a camera housing (fs_whole_enter)
+// and go to macOS's own fullscreen elsewhere. Borderless, it must still take the keyboard: a window that is not key gives the game focus state 2
+@interface DmGameWindow : NSWindow @end
+@implementation DmGameWindow
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return YES; }
+- (void)toggleFullScreen:(id)sender {
+    if (g_fs_whole) fs_whole_leave(self);
+    else if (!(self.styleMask & NSWindowStyleMaskFullScreen) && fs_whole_wanted(self.screen)) fs_whole_enter(self);
+    else [super toggleFullScreen:sender];
+}
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    BOOL r = [super validateMenuItem:item];
+    if (item.action != @selector(toggleFullScreen:)) return r;
+    item.title = win_fullscreen(self) ? @"Exit Full Screen" : @"Enter Full Screen";   // AppKit names the item after macOS's own fullscreen only
+    return g_fs_whole || r;
+}
 @end
 
 // AppKit reports a refused fullscreen request only to the window delegate (there is no notification for it)
@@ -1566,7 +1752,9 @@ void front_run(void (*guest)(void)) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         NSRect r = NSMakeRect(0, 0, 1280, 720);
-        NSWindow *win = [[NSWindow alloc] initWithContentRect:r
+        uint32_t oh = 0, ow = 0; if (dm_fps_state) { memcpy(&oh, dm_fps_state + 0x48, 4); memcpy(&ow, dm_fps_state + 0x68, 4); }
+        if (oh) r.size.height = round(1280.0 * oh / (ow ? ow : 1920));   // a screen shape or output size (DM_SCREEN_ASPECT, DM_OUTPUT_RES): the window starts in its shape
+        NSWindow *win = [[DmGameWindow alloc] initWithContentRect:r
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
         win.title = @(DM_GAME_NAME);   // the game profile's name (game name label)
@@ -1579,6 +1767,7 @@ void front_run(void (*guest)(void)) {
         g_layer.device = MTLCreateSystemDefaultDevice();
         g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         g_layer.contentsScale = win.backingScaleFactor;
+        g_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);   // what shows where the drawable does not reach (a camera housing's row, fs_whole_enter)
         // Apple's HUD over the game (frame rate, frame and GPU time, memory): front_hud_env turns it on before the first device. The layer's developerHUDProperties
         // stay unset: mode=default forces this layer's HUD on, so the Metal HUD menu's Hide HUD left it on screen
         if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) LOG("front end: Metal performance HUD on (DM_METAL_HUD)");
@@ -1587,6 +1776,7 @@ void front_run(void (*guest)(void)) {
         [win makeKeyAndOrderFront:nil];
         screen_refresh(win.screen ?: NSScreen.mainScreen);
         g_win = win;
+        if (g_hdr_want == 1) [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; hdr_apply(g_win.screen); }];   // the headroom follows the brightness
         [NSApp activateIgnoringOtherApps:YES];
         // A host another process starts (scripts/regress.py) is not activated (its focus state stays 2), so its window opened wherever it landed in the window order, and behind
         // another app's window macOS fires its display link about once a second: Breath of the Wild stepped up to 3 vsyncs at boot and never came back (20 fps runs).
@@ -1621,8 +1811,9 @@ void front_run(void (*guest)(void)) {
             static DmWinDelegate *wd; wd = [DmWinDelegate new]; win.delegate = wd;
             __block int want = 1, retried = 0, entering = 0;
             void (^enter)(void) = ^{
-                if (!want || (win.styleMask & NSWindowStyleMaskFullScreen) || !NSApp.isActive || !win.isOnActiveSpace) return;
-                want = 0; entering = 1; [win toggleFullScreen:nil]; };
+                if (!want || win_fullscreen(win) || !NSApp.isActive || !win.isOnActiveSpace) return;
+                want = 0; entering = 1; [win toggleFullScreen:nil];
+                if (g_fs_whole) { entering = 0; g_fs_failed = nil; } };   // over the whole screen it is done at once, and nothing can refuse it
             g_fs_failed = ^{
                 if (!entering) return;
                 entering = 0;
@@ -1661,11 +1852,14 @@ void front_run(void (*guest)(void)) {
         // Input is released when the window stops being key (and when it is minimized) and taken up again when it is key again
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserverForName:NSWindowDidChangeScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); if (win.screen) g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
-        [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); }];
+        [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+            (void)n; screen_refresh(win.screen);
+            if (g_fs_whole && win.screen && !NSEqualRects(win.frame, win.screen.frame)) [win setFrame:win.screen.frame display:YES]; }];   // a new resolution: still the whole screen
         // Entering and leaving fullscreen: the layer is layer-backed, so its frame (and with it the drawable) follows the
-        // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply)
-        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); g_fullscreen = 1; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
-        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_fullscreen = 0; screen_refresh(win.screen); g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
+        // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply).
+        // Fullscreen over the whole screen (fs_whole_enter) calls the same two itself
+        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; fs_entered(win); }];
+        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; fs_left(win); }];
         // DM_FOCUS_KEEP=1 (scripts/regress.py): the game stays in focus while its window is up, whichever app is active. Tears of the Kingdom stops presenting out of focus, so
         // another app taking the key window during an unattended run read as a hang (no frame after the last focus change)
         static int keep = -1; if (keep < 0) keep = getenv("DM_FOCUS_KEEP") && atoi(getenv("DM_FOCUS_KEEP"));
@@ -1680,6 +1874,44 @@ void front_run(void (*guest)(void)) {
         pthread_t th; if (pthread_create(&th, &a, guest_tramp, &ga)) die("pthread_create guest");
         [NSApp run];
     }
+}
+
+// Cloud saves' notice (save_sync.h front_save_sync_note): a rounded dark box at the game's top right for a few seconds, an iCloud symbol and the text; a new notice
+// replaces the one showing. Over the game and the progress screen, and it takes no clicks: the box is not hit-tested (DmNoteView)
+@interface DmNoteView : NSView @end
+@implementation DmNoteView
+- (NSView *)hitTest:(NSPoint)p { (void)p; return nil; }
+@end
+static NSView *g_note; static uint64_t g_note_gen;
+void front_save_sync_note(ss_note kind, const char *text, double seconds) {
+    if (!g_layer || !text) return;   // no window: a windowless run
+    NSString *t = @(text);
+    NSString *sym = kind == SS_NOTE_IN ? @"icloud.and.arrow.down" : kind == SS_NOTE_OUT ? @"icloud.and.arrow.up" : kind == SS_NOTE_WARN ? @"exclamationmark.icloud" : @"checkmark.icloud";
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSView *cv = g_win.contentView; if (!cv) return;
+        [g_note removeFromSuperview];
+        uint64_t gen = ++g_note_gen;
+        NSTextField *label = [NSTextField wrappingLabelWithString:t];
+        label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium]; label.textColor = NSColor.whiteColor; label.maximumNumberOfLines = 2;
+        NSSize ls = [label.cell cellSizeForBounds:NSMakeRect(0, 0, 340, 200)]; ls.width = ceil(ls.width); ls.height = ceil(ls.height);
+        NSImageView *icon = [NSImageView imageViewWithImage:[NSImage imageWithSystemSymbolName:sym accessibilityDescription:@"iCloud"] ?: [NSImage new]];
+        icon.symbolConfiguration = [NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightMedium];
+        icon.contentTintColor = kind == SS_NOTE_WARN ? NSColor.systemYellowColor : NSColor.whiteColor;
+        const CGFloat pad = 10, iw = 22, gap = 8, margin = 16;
+        CGFloat w = pad + iw + gap + ls.width + pad, h = fmax(38, ls.height + 2 * pad);
+        NSView *box = [[DmNoteView alloc] initWithFrame:NSMakeRect(NSWidth(cv.bounds) - w - margin, NSHeight(cv.bounds) - h - margin, w, h)];
+        box.wantsLayer = YES; box.layer.backgroundColor = [NSColor colorWithWhite:0.08 alpha:0.85].CGColor; box.layer.cornerRadius = 10;
+        box.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;   // stays at the top right as the window resizes
+        icon.frame = NSMakeRect(pad, floor((h - iw) / 2), iw, iw); label.frame = NSMakeRect(pad + iw + gap, floor((h - ls.height) / 2), ls.width, ls.height);
+        [box addSubview:icon]; [box addSubview:label];
+        box.alphaValue = 0; [cv addSubview:box positioned:NSWindowAbove relativeTo:nil]; g_note = box;
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *c) { c.duration = 0.25; box.animator.alphaValue = 1; }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (gen != g_note_gen) return;   // replaced meanwhile
+            [NSAnimationContext runAnimationGroup:^(NSAnimationContext *c) { c.duration = 0.4; box.animator.alphaValue = 0; }
+                                completionHandler:^{ if (gen == g_note_gen) { [box removeFromSuperview]; g_note = nil; } }];
+        });
+    });
 }
 
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's, the title, a bar and a count, centered; AppKit views, so it draws while the game's thread waits
@@ -1708,6 +1940,7 @@ void front_progress(const char *title, long done, long total) {
             g_prog_count = prog_label(NSMakeRect(0, 4, 400, 22), 13, NSFontWeightRegular, [NSColor colorWithWhite:0.72 alpha:1]);
             [box addSubview:g_prog_title]; [box addSubview:g_prog_bar]; [box addSubview:g_prog_count]; [g_prog addSubview:box];
             [cv addSubview:g_prog];
+            if (g_note) [cv addSubview:g_note positioned:NSWindowAbove relativeTo:nil];   // the cloud saves' notice stays over it
         }
         g_prog_title.stringValue = tt; g_prog_bar.maxValue = total > 0 ? (double)total : 1; g_prog_bar.doubleValue = (double)done;
         g_prog_count.stringValue = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
@@ -1778,6 +2011,7 @@ void front_gpu_lost(void) {
             exit(70);
         };
         NSWindow *win = g_win;
+        if (g_fs_whole) { fs_whole_leave(win); tell(); return; }   // left at once
         if (!(win.styleMask & NSWindowStyleMaskFullScreen)) { tell(); return; }
         [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { (void)n; tell(); }];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), tell);

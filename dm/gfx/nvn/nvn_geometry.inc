@@ -740,7 +740,7 @@ static void mesh_scratch_bind(id<MTL4RenderCommandEncoder> en) {
     uint64_t f = atomic_load(&g_sub_open); if (!f) f = atomic_load(&g_fence) + 1;
     __atomic_store_n(head + DMSH_MESH_SCRATCH_TAG, (uint32_t)f ? (uint32_t)f : 1u, __ATOMIC_RELAXED);
     uint32_t over = __atomic_load_n(head + DMSH_MESH_SCRATCH_OVER, __ATOMIC_RELAXED);
-    if (over) RED_ONCE(173, "mesh scratch: %u mesh groups found none of the %u slices free and drew nothing (dmsh_abi.h DMSH_MESH_SCRATCH_*: the GPU ran more groups at once than the pool was sized for)", over, head[DMSH_MESH_SCRATCH_MASK] + 1);
+    if (over) RED_ONCE(176, "mesh scratch: %u mesh groups found none of the %u slices free and drew nothing (dmsh_abi.h DMSH_MESH_SCRATCH_*: the GPU ran more groups at once than the pool was sized for)", over, head[DMSH_MESH_SCRATCH_MASK] + 1);
     enc_r_vbuf(en, DMSH_MESH_SCRATCH_SLOT, gpu);   // the mesh function's stage array (the table persists; enc_r_vbuf skips an unchanged address)
 }
 static void mtk_encode(id<MTLRenderCommandEncoder> en_) {

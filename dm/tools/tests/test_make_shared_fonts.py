@@ -4,6 +4,7 @@ import array
 import os
 from pathlib import Path
 import re
+import struct
 import sys
 import tempfile
 from typing import Any
@@ -104,6 +105,92 @@ class WholeSet(unittest.TestCase):
             for cp in (0x41, 0xE9, 0x416, 0x3042, 0x30A2, 0x6F22, 0xFF01): self.assertIn(cp, std)
             self.assertNotIn(0xAC00, std)
             self.assertIn(0xD7A3, cmap(TTFont(os.path.join(d, 'korean.ttf'))))
+
+
+import make_ext_font as mef
+import game_icon_font as gif
+
+
+class IconStyles(unittest.TestCase):
+    def test_the_icon_is_the_button_pressed(self):
+        # by position the Switch's A is the right button (Xbox B), by label the bottom one (Xbox A); X and Y the same way
+        self.assertEqual([mef.pad_button('xbox', 'position', b) for b in 'ABXY'], ['B', 'A', 'Y', 'X'])
+        self.assertEqual([mef.pad_button('xbox', 'label', b) for b in 'ABXY'], ['A', 'B', 'X', 'Y'])
+        self.assertEqual([mef.pad_button('playstation', 'position', b) for b in 'ABXY'], ['circle', 'cross', 'triangle', 'square'])
+        self.assertEqual([mef.pad_button('playstation', 'label', b) for b in 'ABXY'], ['cross', 'circle', 'square', 'triangle'])
+
+    def test_variants_are_the_hosts(self):
+        src = (REPO / 'dm/host/button_icons.h').read_text()
+        self.assertEqual(sorted(v for v in mef.VARIANTS if v), sorted(set(re.findall(r'"((?:xbox|playstation)[a-z_]*)"', src))))
+        self.assertEqual(mef.variant_path('/f/nintendo_ext.ttf', 'xbox_label'), '/f/nintendo_ext_xbox_label.ttf')
+        self.assertEqual(mef.variant_path('/f/nintendo_ext.ttf', ''), '/f/nintendo_ext.ttf')
+
+    def test_icon_font_rows(self):
+        rows = gif.parse_rows([['Font/F.bfarc.zs:scft/E.bfotf', 'E040=A E04B=Plus']])
+        self.assertEqual(rows, [('Font/F.bfarc.zs', 'scft/E.bfotf', {0xE040: 'A', 0xE04B: 'Plus'})])
+        with self.assertRaises(ValueError): gif.parse_rows([['F.ttf', 'E040=Home']])
+
+    def test_obfuscated_font_in_a_sarc(self):
+        font = b'OTTO' + bytes(range(60))
+        key = 0x12345678
+        plain = struct.pack('>II', 0x7f9a0218, len(font)) + font
+        enc = b''.join(struct.pack('>I', struct.unpack_from('>I', plain, i)[0] ^ key) for i in range(0, len(plain), 4))
+        self.assertEqual(gif.sfnt(enc), font)
+        self.assertEqual(gif.sfnt(font), font)
+        # a SARC with one member, as the Switch's (little-endian)
+        name = b'scft/E.bfotf\0'; name += b'\0' * (-len(name) % 4)
+        doff = 0x14 + 0xc + 0x10 + 8 + len(name)
+        sarc = (b'SARC' + struct.pack('<HHII', 0x14, 0xfeff, doff + len(enc), doff) + b'\0\0\0\0' + b'SFAT' + struct.pack('<HHI', 0xc, 1, 0x65) +
+                struct.pack('<IIII', 0, 0x01000000, 0, len(enc)) + b'SFNT' + struct.pack('<HH', 8, 0) + name + enc)
+        self.assertEqual(gif.sfnt(gif.sarc(sarc)['scft/E.bfotf']), font)
+
+
+def icon_font(path, cff):   # a game's icon font: a square glyph at U+E040 (A) and U+E041 (B), TrueType or CFF outlines
+    names = ['.notdef', 'uniE040', 'uniE041']
+    fb = FontBuilder(1000, isTTF=not cff)
+    fb.setupGlyphOrder(names); fb.setupCharacterMap({0xE040: 'uniE040', 0xE041: 'uniE041'})
+    def draw(pen): pen.moveTo((50, 20)); pen.lineTo((50, 620)); pen.lineTo((650, 620)); pen.lineTo((650, 20)); pen.closePath()
+    if cff:
+        from fontTools.pens.t2CharStringPen import T2CharStringPen
+        cs = {}
+        for n in names: p = T2CharStringPen(700, None); draw(p); cs[n] = p.getCharString()
+        fb.setupCFF('Icons', {'FullName': 'Icons'}, cs, {})
+    else:
+        gl = {}
+        for n in names: p = TTGlyphPen(None); draw(p); gl[n] = p.glyph()
+        fb.setupGlyf(gl)
+    fb.setupHorizontalMetrics({n: (700, 50) for n in names}); fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupNameTable({'familyName': 'Icons', 'styleName': 'Regular', 'fullName': 'Icons', 'psName': 'Icons'})
+    fb.setupOS2(); fb.setupPost(); fb.font.save(path)
+
+
+@unittest.skipIf(not os.path.isfile(mef.LETTERS), "macOS's Arial Rounded Bold")
+class Restyle(unittest.TestCase):
+    def test_glyphs_redrawn_in_their_box(self):
+        from fontTools.pens.boundsPen import BoundsPen
+        for cff in (False, True):
+            with self.subTest(cff=cff), tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, 'icons.otf'); icon_font(p, cff)
+                f = TTFont(p)
+                self.assertEqual(mef.restyle(f, {0xE040: 'A'}, 'xbox', 'position'), [0xE040])
+                out = os.path.join(d, 'out.otf'); f.save(out); f = TTFont(out)
+                gs = f.getGlyphSet(); a = BoundsPen(gs); gs['uniE040'].draw(a); b = BoundsPen(gs); gs['uniE041'].draw(b)
+                from fontTools.pens.recordingPen import RecordingPen
+                ra, rb = RecordingPen(), RecordingPen(); gs['uniE040'].draw(ra); gs['uniE041'].draw(rb)
+                self.assertGreater(len(ra.value), 3 * len(rb.value), 'A redrawn (a disc with a letter), B left as it was (a square)')
+                x0, y0, x1, y1 = a.bounds
+                self.assertTrue(x0 >= 49 and y0 >= 19 and x1 <= 651 and y1 <= 621, a.bounds)
+                self.assertEqual(f['hmtx']['uniE040'][0], 700)
+                self.assertEqual(f['name'].getDebugName(4), 'Icons')
+
+    def test_every_variant_of_the_extension_font(self):
+        with tempfile.TemporaryDirectory() as d:
+            mef.build_all(os.path.join(d, 'nintendo_ext.ttf'))
+            self.assertEqual(sorted(os.listdir(d)), sorted(os.path.basename(mef.variant_path('nintendo_ext.ttf', v)) for v in mef.VARIANTS))
+            for v in mef.VARIANTS:
+                f = TTFont(os.path.join(d, os.path.basename(mef.variant_path('nintendo_ext.ttf', v))))
+                self.assertEqual(f['name'].getDebugName(4), 'DM Nintendo Extension')
+                self.assertEqual(f.getBestCmap()[0xE0E0], 'btnA')
 
 
 if __name__ == '__main__':
