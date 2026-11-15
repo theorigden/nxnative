@@ -58,6 +58,11 @@ output_size	on
 tonemap_agl	0ac9a54938974396
 hdr_expand	ac58fc18eda5f387
 hdr_final	dd3d1e0ebf732428
+# FSR 1's EASU (above) is also the game's upscaler: DM_UPSCALER=metalfx (the launcher's Game's upscaler) draws it with MetalFX's spatial scaler in HDR mode, from the 3D picture at the render
+# scale into the final image (nvn_mtl.m up_easu_draw; the game note's Upscaling)
+upscaler_easu	ac58fc18eda5f387
+# MetalFX by default while the render scale (DM_RENDER_SCALE) is below 1, the game's own EASU at 1 (Theo's choice, 2026-11-15)
+upscaler_default	auto
 
 # ---- Shader split (shader_split.py) ----
 shader_groups	/Shader/ApplicationPackage=layout /Shader/=shader /Effect/=effect /UI/=layout

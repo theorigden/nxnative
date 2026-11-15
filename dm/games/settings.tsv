@@ -20,7 +20,7 @@ DM_DYNAMIC_RESOLUTION	toggle	-	0	fixups:DYNAMIC_RESOLUTION	Game	Dynamic resoluti
 DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale	Resolution of the 3D picture, as a share of the output's; the HUD and text stay at full resolution. Lower it for a steadier frame rate at native resolution.	level=basic
 DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode		level=basic
 DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX	off	always	Game	Upscaling	Uses more GPU time and can increase heat.
-DM_UPSCALER	choice	game=Game's own,metalfx=MetalFX	game	DM_GAME_UPSCALER_N!=0	Game	Game's upscaler
+DM_UPSCALER	choice	auto=Automatic?DM_GAME_UPSCALER_DEFAULT==auto,game=Game's own,metalfx=MetalFX	DM_GAME_UPSCALER_DEFAULT	DM_GAME_UPSCALER_N!=0	Game	Game's upscaler	MetalFX scales the 3D picture to the output in place of the game's own upscaler; the look changes. Automatic uses MetalFX while Render scale is below 100%.
 DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language		level=basic
 DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
 DM_AUDIO_SURROUND	choice	spatial=Spatial audio,stereo=Stereo	spatial	platform:mac	Game	Sound

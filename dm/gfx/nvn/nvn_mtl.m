@@ -13776,6 +13776,11 @@ static int lc_keeps(uint32_t op) {
 
 static void dispatch(const p_dispatch *dp);
 static int up_mfx_wanted(NvShader *cs); static int up_mfx_encode(NvShader *cs);   // a game's upscaler through MetalFX (see up_mfx_encode)
+static int up_mfx_scale(const char *key, id<MTLTexture> in, NVNcopyRegion ir, id<MTLTexture> out, unsigned ol, unsigned os, NVNcopyRegion orr, int col, float gain, float hi);
+static int up_easu_wanted(NvShader *fs); static int up_easu_draw(NvShader *fs);   // a game's FSR 1 EASU draw through MetalFX (see up_easu_draw)
+#ifndef DM_GAME_UPSCALER_EASU   // a profile header from before the key (test fixtures)
+#define DM_GAME_UPSCALER_EASU ""
+#endif
 static int ndve_engine_dispatch(NvShader *cs, const p_dispatch *dp);   // nn::ndve's movie network as the host's kernels (DM_NDVE_ENGINE=1, nvn_ndve.inc)
 // ---------- Compute dispatches moved ahead of the render pass they would split (DM_NVN_CS_HOIST) ----------
 // Metal cannot run a compute dispatch inside a render pass, so a dispatch between two draws of one pass ends it, and on a tile-based GPU every attachment is stored and loaded again:
@@ -13986,6 +13991,10 @@ static int skip_fs_draw(NvProg *pr) {
 }
 static void draw(const p_draw *dw, const p_draw_idx *di) {
     cp_stamp start = cp_begin();
+    if (sizeof(DM_GAME_UPSCALER_EASU) > 1 && !(dw ? dw->ind || dw->prim == DM_PRIM_MESH_TASKS : di->ind) && S.prog) {   // the game's FSR 1 EASU draw, by MetalFX instead (DM_UPSCALER=metalfx; up_easu_draw)
+        __unsafe_unretained NvProg *pr = prog_get(S.prog); __unsafe_unretained NvShader *fs = pr ? pr->sh[1] : nil;
+        if (fs && up_easu_wanted(fs) && up_easu_draw(fs)) { cp_end(5, start); return; }
+    }
     int hx = g_hdr_roles ? hdr_draw_begin() : 0;   // the profile's HDR draws (nvn_hdr.inc): the expansion's blend, the final image's copy
     if (dw && dw->prim == DM_PRIM_MESH_TASKS) mesh_tasks_draw(dw); else draw_(dw, di);
     if (hx) hdr_draw_end();
@@ -14802,33 +14811,39 @@ static int fmt_int_or_ds(MTLPixelFormat f) {
 }
 // flags: the copy's NVN_COPY_FLAGS_MIRROR_X_BIT / _Y_BIT, and the host's own COPY_T2T_SQUARE (no NVN copy flag: the guest's copies pass only the bits they check), which draws each colour
 // channel squared keeping its sign, c * |c| (copy.metal fsq: an upscaler's square-rooted input into linear colour, up_mfx_encode)
+// gain, hi (copy_t2t_draw_g; 1 and infinity in copy_t2t_draw): each colour channel multiplied by gain and held to [0, hi] (copy.metal fsg: a game upscaler's input divided by the HDR headroom,
+// multiplied back on its way into MetalFX, and MetalFX's result held to its input's range, up_mfx_scale)
 enum { COPY_T2T_SQUARE = 1 << 30 };
+static int copy_t2t_draw_g(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsigned ss, unsigned dl, unsigned ds, const NVNcopyRegion *sr, const NVNcopyRegion *dr, int linear, int flags, float gain, float hi);
 static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsigned ss, unsigned dl, unsigned ds, const NVNcopyRegion *sr, const NVNcopyRegion *dr, int linear, int flags) {
-    static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pso; static id<MTLFunction> vf, ff, fq, fd, fds; static id<MTLSamplerState> samp[2]; static id<MTL4ArgumentTable> at; static id<MTLDepthStencilState> dss, dss_s; static int failed;
+    return copy_t2t_draw_g(s, d, sl, ss, dl, ds, sr, dr, linear, flags, 1, INFINITY);
+}
+static int copy_t2t_draw_g(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsigned ss, unsigned dl, unsigned ds, const NVNcopyRegion *sr, const NVNcopyRegion *dr, int linear, int flags, float gain, float hi) {
+    static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pso; static id<MTLFunction> vf, ff, fq, fg, fd, fds; static id<MTLSamplerState> samp[2]; static id<MTL4ArgumentTable> at; static id<MTLDepthStencilState> dss, dss_s; static int failed;
     if (failed || sr->width <= 0 || sr->height <= 0 || dr->width <= 0 || dr->height <= 0) return 0;
     int depth = (s.pixelFormat == MTLPixelFormatDepth32Float || s.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 || s.pixelFormat == MTLPixelFormatDepth16Unorm) && d.pixelFormat == s.pixelFormat, stencil = depth && d.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
     if (!depth && (fmt_int_or_ds(s.pixelFormat) || fmt_int_or_ds(d.pixelFormat))) return 0;
     if (mtl_fmt_block(d.pixelFormat) || !(d.usage & MTLTextureUsageRenderTarget) || s.sampleCount > 1 || d.sampleCount > 1) return 0;
     if (!pso) {
         NSError *e = nil; id<MTLLibrary> lib = host_lib("copy", &e);
-        vf = [lib newFunctionWithName:@"vs"]; ff = [lib newFunctionWithName:@"fs"]; fq = [lib newFunctionWithName:@"fsq"]; fd = [lib newFunctionWithName:@"fsd"]; fds = [lib newFunctionWithName:@"fsds"];
+        vf = [lib newFunctionWithName:@"vs"]; ff = [lib newFunctionWithName:@"fs"]; fq = [lib newFunctionWithName:@"fsq"]; fg = [lib newFunctionWithName:@"fsg"]; fd = [lib newFunctionWithName:@"fsd"]; fds = [lib newFunctionWithName:@"fsds"];
         MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new]; dd.depthCompareFunction = MTLCompareFunctionAlways; dd.depthWriteEnabled = YES; dss = [g_dev newDepthStencilStateWithDescriptor:dd];
         MTLStencilDescriptor *sd_ = [MTLStencilDescriptor new]; sd_.stencilCompareFunction = MTLCompareFunctionAlways; sd_.depthStencilPassOperation = MTLStencilOperationReplace;   // Replace writes the [[stencil]] output
         dd.frontFaceStencil = dd.backFaceStencil = sd_; dss_s = [g_dev newDepthStencilStateWithDescriptor:dd];
         MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxTextureBindCount = 2; ad.maxSamplerStateBindCount = 1; ad.maxBufferBindCount = 1; at = rec_table([g_dev newArgumentTableWithDescriptor:ad error:&e]);
         for (int i = 0; i < 2; i++) { MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new]; sd.minFilter = sd.magFilter = i ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
             sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge; sd.supportArgumentBuffers = YES; samp[i] = [g_dev newSamplerStateWithDescriptor:sd]; }
-        if (!vf || !ff || !fq || !fd || !fds || !dss || !dss_s || !at || !samp[0] || !samp[1]) { failed = 1; MLOG("[RED] cannot create the pipelines for format-converting / scaling texture copies: %s", e.localizedDescription.UTF8String); return 0; }
+        if (!vf || !ff || !fq || !fg || !fd || !fds || !dss || !dss_s || !at || !samp[0] || !samp[1]) { failed = 1; MLOG("[RED] cannot create the pipelines for format-converting / scaling texture copies: %s", e.localizedDescription.UTF8String); return 0; }
         pso = [NSMutableDictionary dictionary];
     }
     // Stencil: read through a stencil-only view of the source (one per layer below); without one it is cleared to 0
     id<MTLTexture> stv0 = stencil && s.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 ? [s newTextureViewWithPixelFormat:MTLPixelFormatX32_Stencil8 textureType:MTLTextureType2D levels:NSMakeRange(sl, 1) slices:NSMakeRange(ss + sr->zoffset, 1)] : nil;
     int scopy = stv0 != nil;
-    int square = (flags & COPY_T2T_SQUARE) && !depth;
-    NSNumber *pk = @((d.pixelFormat * 2 + scopy) * 2 + square);
+    int square = (flags & COPY_T2T_SQUARE) && !depth, gained = (gain != 1 || isfinite(hi)) && !depth && !square;
+    NSNumber *pk = @(((d.pixelFormat * 2 + scopy) * 2 + square) * 2 + gained);
     id<MTLRenderPipelineState> ps = pso[pk];
     if (!ps) {
-        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new]; pd.vertexFunction = vf; pd.fragmentFunction = depth ? (scopy ? fds : fd) : square ? fq : ff;
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new]; pd.vertexFunction = vf; pd.fragmentFunction = depth ? (scopy ? fds : fd) : square ? fq : gained ? fg : ff;
         if (depth) { pd.depthAttachmentPixelFormat = d.pixelFormat; if (stencil) pd.stencilAttachmentPixelFormat = d.pixelFormat; } else pd.colorAttachments[0].pixelFormat = d.pixelFormat;
         NSError *e = nil; ps = [g_dev newRenderPipelineStateWithDescriptor:pd error:&e];
         if (!ps) { RED_ONCE(83, "format-converting / scaling texture copy: cannot create the pipeline for destination format %lu: %s", (unsigned long)d.pixelFormat, e.localizedDescription.UTF8String); return 0; }
@@ -14840,12 +14855,12 @@ static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsign
     rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     for (int z = 0; z < nz; z++) {
         id<MTLTexture> sv = [s newTextureViewWithPixelFormat:s.pixelFormat textureType:MTLTextureType2D levels:NSMakeRange(sl, 1) slices:NSMakeRange(ss + sr->zoffset + z, 1)];
-        id<MTLBuffer> pb; size_t po = arena_alloc(32, &pb);   // parameters in the frame arena (resident already): a fresh 32-byte buffer per copy was a residency add, a commit and a release (Link's Awakening, about 11 a frame)
+        id<MTLBuffer> pb; size_t po = arena_alloc(48, &pb);   // parameters in the frame arena (resident already): a fresh 32-byte buffer per copy was a residency add, a commit and a release (Link's Awakening, about 11 a frame)
         if (!sv || !pb) { RED_ONCE(84, "format-converting / scaling texture copy: cannot create the source view / argument block"); return z > 0; }
         float *p = (float *)((uint8_t *)pb.contents + po); p[0] = sr->xoffset; p[1] = sr->yoffset; p[2] = (float)sr->width / dr->width; p[3] = (float)sr->height / dr->height;
         if (flags & NVN_COPY_FLAGS_MIRROR_X_BIT) { p[0] += sr->width; p[2] = -p[2]; }   // mirrored: walk the source region from its far edge
         if (flags & NVN_COPY_FLAGS_MIRROR_Y_BIT) { p[1] += sr->height; p[3] = -p[3]; }
-        p[4] = dr->xoffset; p[5] = dr->yoffset; p[6] = sw; p[7] = sh;
+        p[4] = dr->xoffset; p[5] = dr->yoffset; p[6] = sw; p[7] = sh; p[8] = gain; p[9] = hi; p[10] = p[11] = 0;
         MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
         MTLRenderPassAttachmentDescriptor *a = depth ? (MTLRenderPassAttachmentDescriptor *)rp.depthAttachment : (MTLRenderPassAttachmentDescriptor *)rp.colorAttachments[0];
         int whole = !dr->xoffset && !dr->yoffset && (unsigned)dr->width == dw && (unsigned)dr->height == dh;   // the copy draws every pixel of the level (no blending, no discard): its old content is not loaded (Link's Awakening copies its scene this way every frame)
@@ -16162,7 +16177,8 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     return 1;
 }
 // ---------- Upscaling in the present (DM_PRESENT_UPSCALE) ----------
-// Opt-in spatial scaling of the valid content to its letterboxed viewport, in perceptual mode (present_raw_src supplies gamma bytes). The scaler reads the presented texture itself
+// Opt-in spatial scaling of the valid content to its letterboxed viewport, in perceptual mode (present_raw_src supplies gamma bytes), or in HDR mode for a float picture presented into the
+// float layer (HDR's final image, nvn_hdr.inc: linear, past 1 above SDR white). The scaler reads the presented texture itself
 // when the picture is all of it (DM_FX_INPLACE), else a copy of the crop at the origin of a texture of its own (MetalFX reads from the origin); it writes the canvas itself when
 // the picture fills it unflipped and the canvas takes the scaler's output (DM_FX_DIRECT), else a texture of its own that the present pass draws 1:1 with the usual origin and output
 // format. Each texture of its own is made when a present first needs it. Queue barriers serialize both the frame's rendering and reuse of the scaler's textures across presents.
@@ -16216,15 +16232,15 @@ static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTe
         if (!g_fx_comp) g_fx_comp = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
         MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
         d.colorTextureFormat = raw.pixelFormat; d.outputTextureFormat = out_pf; d.inputWidth = cw; d.inputHeight = ch; d.outputWidth = ow; d.outputHeight = oh;
-        d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
-        sc = g_fx_comp ? [d newSpatialScalerWithDevice:g_dev compiler:g_fx_comp] : nil;
+        d.colorProcessingMode = pf_float(raw.pixelFormat) ? MTLFXSpatialScalerColorProcessingModeHDR : MTLFXSpatialScalerColorProcessingModePerceptual;   // a float picture is linear, past 1 in HDR
+        @try { sc = g_fx_comp ? [d newSpatialScalerWithDevice:g_dev compiler:g_fx_comp] : nil; } @catch (NSException *x) { sc = nil; }   // a format it does not take may throw
         fx->made_at = g_present_n; fx->made++;
         if (!sc) { memcpy(fx->refused, key, sizeof key);
             MLOG("present upscaling: MetalFX makes no spatial scaler for %lux%lu format %lu → %lux%lu format %lu%s; this size is scaled bilinearly", (unsigned long)cw, (unsigned long)ch, (unsigned long)raw.pixelFormat,
                  (unsigned long)ow, (unsigned long)oh, (unsigned long)out_pf, g_fx_comp ? "" : " (no Metal 4 compiler)"); return nil; }
         fx->sc = sc;
-        MLOG("present upscaling: MetalFX spatial scaler %lux%lu → %lux%lu (format %lu → %lu, scaler #%d, made in %.1f ms)", (unsigned long)cw, (unsigned long)ch, (unsigned long)ow, (unsigned long)oh,
-             (unsigned long)raw.pixelFormat, (unsigned long)out_pf, fx->made, (now_ns() - t0) / 1e6);
+        MLOG("present upscaling: MetalFX spatial scaler (%s) %lux%lu → %lux%lu (format %lu → %lu, scaler #%d, made in %.1f ms)", pf_float(raw.pixelFormat) ? "HDR" : "perceptual", (unsigned long)cw, (unsigned long)ch,
+             (unsigned long)ow, (unsigned long)oh, (unsigned long)raw.pixelFormat, (unsigned long)out_pf, fx->made, (now_ns() - t0) / 1e6);
     }
     // The picture is the whole presented texture, which the scaler can read: it reads that texture (the copy only moved the rectangle to the origin)
     static int in_place_ok = -1; if (in_place_ok < 0) { const char *e = getenv("DM_FX_INPLACE"); in_place_ok = !(e && !strcmp(e, "0")); }
@@ -16261,14 +16277,37 @@ enum { UP_MFX_SCALERS = 8 };   // dynamic resolution moves the input, and a form
 static up_mfx_scaler g_up_mfx[UP_MFX_SCALERS]; static int g_up_mfx_next;
 static uint64_t g_up_mfx_n, g_up_mfx_kept, g_up_mfx_straight[2];   // dispatches drawn by MetalFX, dispatches of a named shader left to it, of the drawn: input and output that were the game's own textures
 void mtl_up_mfx_stats(uint64_t *n, uint64_t *kept) { *n = g_up_mfx_n; *kept = g_up_mfx_kept; }
+static int g_up_mode = 1;   // DM_UPSCALER=ab (diagnostic, with DM_AB): the sw_mode of the phases MetalFX draws in; 1 otherwise
+static int g_up_auto;       // DM_UPSCALER=auto: MetalFX only while the render scale is below 1 (up_mfx_now)
+#ifndef DM_GAME_UPSCALER_DEFAULT   // a profile header from before the key (test fixtures)
+#define DM_GAME_UPSCALER_DEFAULT "game"
+#endif
+extern uint8_t *dm_fps_state;   // hle_nvn.c / loader.c: the frame step state page, +0x10 the render scale (NULL without one)
+// DM_UPSCALER (unset: the profile's upscaler_default, game unless it says otherwise): game, metalfx, auto (MetalFX while the render scale is below 1: the 3D picture is rendered
+// smaller than the game would and scaled up; at 1 the game's own path, bit for bit) or ab (with DM_AB). Whether MetalFX may draw at all; up_mfx_now decides each dispatch or draw
 static int up_mfx_on(void) {
     static int v = -1;
     if (v >= 0) return v;
-    const char *e = getenv("DM_UPSCALER"); v = e && !strcmp(e, "metalfx");
-    if (e && *e && strcmp(e, "metalfx") && strcmp(e, "game")) MLOG("[RED] DM_UPSCALER=%s: metalfx or game; keeping the game's", e);
+    const char *e = getenv("DM_UPSCALER"), *d = DM_GAME_UPSCALER_DEFAULT;
+    if (!e || !*e) e = d;
+    if (!strncmp(e, "ab", 2)) { g_up_mode = sw_mode("DM_UPSCALER", 0); v = g_up_mode != 0; if (v) MLOG("DM_UPSCALER=%s: MetalFX draws the game's upscaler in the A/B phases that are on, the game's own in the others", e); }
+    else if (!strcmp(e, "metalfx")) v = 1;
+    else if (!strcmp(e, "auto")) v = g_up_auto = 1;
+    else { v = 0; if (strcmp(e, "game")) MLOG("[RED] DM_UPSCALER=%s: metalfx, auto or game; keeping the game's", e); }
     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("upscaler: this GPU has no Metal 4 MetalFX spatial scaler; the game's own upscaler draws"); v = 0; }
-    if (v) MLOG("upscaler (DM_UPSCALER): metalfx, the game's upscaler shaders (%d, from the shader map) are drawn by MetalFX's spatial scaler", DM_GAME_UPSCALER_N);
+    if (v) MLOG("upscaler (DM_UPSCALER=%s%s): the game's upscaler shaders (%d) are drawn by MetalFX's spatial scaler%s", e, getenv("DM_UPSCALER") && *getenv("DM_UPSCALER") ? "" : ", the profile's default", DM_GAME_UPSCALER_N,
+                g_up_auto ? " while the render scale is below 1" : "");
     return v;
+}
+// Whether MetalFX draws the upscaler now: the A/B phase, and for auto the render scale as the frame step state holds it, read at each dispatch or draw, so a change while the game
+// runs (the settings window writes +0x10) takes effect at the next frame
+static int up_mfx_now(void) {
+    if (!sw_on(g_up_mode)) return 0;
+    if (!g_up_auto) return 1;
+    float sc = 1; if (dm_fps_state) memcpy(&sc, dm_fps_state + 0x10, sizeof sc);
+    int on = sc > 0 && sc < 0.999f;
+    static int said = -1; if (on != said) { said = on; MLOG("upscaler (auto): render scale %.2f: %s", sc, on ? "MetalFX scales the 3D picture" : "the game's own upscaler"); }
+    return on;
 }
 // The colour a variant of the network takes and writes, from the sRGB curves in its code (their constants are immediates, whole bytes in the code). The variants differ inside a pack, so this is the shader's and not the game's:
 // Bananza's all encode linear input (0.0031308, 1 / 2.4 as floats) and come in threes: no decode at the end (the output stays encoded), a decode clamped to 0-1, a decode up to 128. Splatoon Raiders' all read colour that is encoded
@@ -16394,6 +16433,7 @@ static int up_mfx_rect(const uint32_t v[4], NSUInteger w, NSUInteger h, NVNcopyR
 }
 // The dispatch of upscaler cs as MetalFX's spatial scaler from its texture slot's rectangle to its image slot's (see above): 1 when drawn, 0 to run the shader
 static int up_mfx_encode(NvShader *cs) {
+    if (!up_mfx_now()) return 0;   // DM_UPSCALER=ab: a phase that is off; auto: the render scale is 1
     int ti = -1, oi = -1;
     for (int i = 0; i < cs->rf.nb; i++) { int k = cs->rf.b[i].kind; if (k == NVN_RB_TEX && ti < 0) ti = i; else if (k == NVN_RB_IMG && oi < 0) oi = i; else if (k == NVN_RB_TEX || k == NVN_RB_IMG) return 0; }
     if (ti < 0 || oi < 0) { static int once; if (!once++) MLOG("[RED] upscaler %s: not one texture and one image; the shader draws", cs->key); return 0; }
@@ -16414,14 +16454,20 @@ static int up_mfx_encode(NvShader *cs) {
     if (!in || !out || in == out || in.textureType != MTLTextureType2D || out.textureType != MTLTextureType2D || in.sampleCount != 1 || out.sampleCount != 1 ||
         fmt_int_or_ds(in.pixelFormat) || fmt_int_or_ds(out.pixelFormat) || mtl_fmt_block(out.pixelFormat) || !up_mfx_rect(v, in.width, in.height, &ir) || !up_mfx_rect(v + 4, out.width, out.height, &orr) ||
         orr.width < ir.width || orr.height < ir.height || (orr.width == ir.width && orr.height == ir.height)) { g_up_mfx_kept++; return 0; }
-    int srgb = cs->up_color == UP_COLOR_SRGB, root = cs->up_color == UP_COLOR_ROOT;
+    return up_mfx_scale(cs->key, in, ir, out, 0, 0, orr, cs->up_color, 1, INFINITY);
+}
+// The scale of rectangle ir of in into rectangle orr of out (level ol, slice os) by MetalFX's spatial scaler, in the colour col (UP_COLOR_LINEAR: HDR mode; UP_COLOR_SRGB: perceptual mode, the
+// output decoded; UP_COLOR_ROOT: the input squared, then HDR mode), with the input multiplied by gain on its way in (1: as it is; a game's EASU draw in HDR, up_easu_draw): 1 when encoded,
+// 0 when not, and then the caller's shader draws. hi: the largest value the result may hold (INFINITY: any), which takes the result through the draw back. key: the shader's, for the log
+static int up_mfx_scale(const char *key, id<MTLTexture> in, NVNcopyRegion ir, id<MTLTexture> out, unsigned ol, unsigned os, NVNcopyRegion orr, int col, float gain, float hi) {
+    int srgb = col == UP_COLOR_SRGB, root = col == UP_COLOR_ROOT;
     // Each side is the game's own texture when MetalFX can take it as it is: the rectangle is the whole texture (MetalFX reads and writes from the origin) and the format is not sRGB (as the
     // copies, which keep its decode). The input in any format MetalFX takes, unless it is square-rooted: only the copy squares it (COPY_T2T_SQUARE). The output, private, only in the
     // scaler's own: MetalFX's own writes of R11G11B10F come out about two steps of its mantissa low (2.0 as 1.94, 0.5 as 0.484), where its RGBA16F output drawn back gives 1.98 and 0.496
     // (t_upscaler_mfx), so a packed output stays drawn back. sRGB input's output is always the scaler's own, for its decode. Else the scaler's own texture, through a copy
     MTLPixelFormat c16 = MTLPixelFormatRGBA16Float, of = srgb ? MTLPixelFormatRGBA8Unorm : MTLPixelFormatRGBA16Float;
-    int whole_in = !root && !ir.xoffset && !ir.yoffset && (NSUInteger)ir.width == in.width && (NSUInteger)ir.height == in.height && pf_srgb_linear(in.pixelFormat) == MTLPixelFormatInvalid && !mtl_fmt_block(in.pixelFormat);
-    int whole_out = !srgb && !orr.xoffset && !orr.yoffset && (NSUInteger)orr.width == out.width && (NSUInteger)orr.height == out.height && out.storageMode == MTLStorageModePrivate && out.pixelFormat == of;
+    int whole_in = !root && gain == 1 && !ir.xoffset && !ir.yoffset && (NSUInteger)ir.width == in.width && (NSUInteger)ir.height == in.height && pf_srgb_linear(in.pixelFormat) == MTLPixelFormatInvalid && !mtl_fmt_block(in.pixelFormat);
+    int whole_out = !srgb && !isfinite(hi) && !ol && !os && !orr.xoffset && !orr.yoffset && (NSUInteger)orr.width == out.width && (NSUInteger)orr.height == out.height && out.storageMode == MTLStorageModePrivate && out.pixelFormat == of;
     MTLPixelFormat cf = whole_in && (in.pixelFormat == c16 || up_mfx_direct_on()) ? in.pixelFormat : c16;
     up_mfx_scaler *e = NULL; int sin = 0, sout = 0;
     for (int t = 0; t < 2 && !e; t++) {   // the game's format first; one MetalFX refuses (no scaler made, or a usage the game's texture lacks) falls back to the scaler's own
@@ -16442,21 +16488,84 @@ static int up_mfx_encode(NvShader *cs) {
     rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     ubd_land_compute();
     NVNcopyRegion at0 = {0, 0, 0, ir.width, ir.height, 1}, at0o = {0, 0, 0, orr.width, orr.height, 1};
-    if (!sin && !copy_t2t_draw(in, color, 0, 0, 0, 0, &ir, &at0, 0, root ? COPY_T2T_SQUARE : 0)) { g_up_mfx_kept++; return 0; }   // to the origin of the scaler's input (a nearest draw: same size)
+    if (!sin && !copy_t2t_draw_g(in, color, 0, 0, 0, 0, &ir, &at0, 0, root ? COPY_T2T_SQUARE : 0, root ? 1 : gain, INFINITY)) { g_up_mfx_kept++; return 0; }   // to the origin of the scaler's input (a nearest draw: same size)
     mfx_order(g_cb, nil, MTLOriginMake(0, 0, 0), MTLSizeMake(0, 0, 0), nil);   // the scaler after the frame's work so far, and the next pass after the scaler
     NSUInteger cw = (NSUInteger)ir.width, ch = (NSUInteger)ir.height;
     rec_cb_block(g_cb, ^(id<MTL4CommandBuffer> cb) {   // the real command buffer, on the encoding thread when it runs (iOS's default)
         sc.colorTexture = color; sc.outputTexture = result; sc.inputContentWidth = cw; sc.inputContentHeight = ch;
         [sc encodeToCommandBuffer:cb];
     });
-    if (!sout && !copy_t2t_draw(drawn, out, 0, 0, 0, 0, &at0o, &orr, 0, 0)) {
+    if (!sout && !copy_t2t_draw_g(drawn, out, 0, 0, ol, os, &at0o, &orr, 0, 0, 1, hi)) {
         args_dirty_all(); g_up_mfx_kept++; return 0;   // only the scratch image was scaled; the game's shader can still produce the output
     }
     args_dirty_all();
     g_up_mfx_straight[0] += sin; g_up_mfx_straight[1] += sout;
-    if (!g_up_mfx_n++) MLOG("upscaler: first dispatch of %s drawn by MetalFX, %dx%d at %d,%d of %lux%lu (format %lu, %s) → %dx%d at %d,%d of %lux%lu (format %lu, %s)%s", cs->key, ir.width, ir.height, ir.xoffset, ir.yoffset,
+    if (!g_up_mfx_n++) MLOG("upscaler: first dispatch of %s drawn by MetalFX, %dx%d at %d,%d of %lux%lu (format %lu, %s) → %dx%d at %d,%d of %lux%lu (format %lu, %s)%s", key, ir.width, ir.height, ir.xoffset, ir.yoffset,
                             (unsigned long)in.width, (unsigned long)in.height, (unsigned long)in.pixelFormat, sin ? "straight" : "copied", orr.width, orr.height, orr.xoffset, orr.yoffset, (unsigned long)out.width,
                             (unsigned long)out.height, (unsigned long)out.pixelFormat, sout ? "straight" : "drawn back", srgb ? ", decoded from sRGB" : root ? ", squared from its square roots" : "");
+    return 1;
+}
+// ---------- A game's FSR 1 EASU draw by MetalFX (DM_UPSCALER=metalfx, profile key upscaler_easu) ----------
+// Tears of the Kingdom scales its tone-mapped, anti-aliased 3D picture (the render scale's size) into the final image (the output's size, R11G11B10F, linear) with AMD FSR 1's EASU,
+// agl's post-effect ac58fc18eda5f387: one full-viewport draw before the HUD's, in the same pass. Its fragment shader reads texture 0 with texel fetches at
+// floor(pixel * con0.xy + con0.zw) from the texture's origin, and uniform buffer 0 holds FSR's con0 = (input / output size, 0.5 * input / output - 0.5) at +0 (1.4.3 docked at render
+// scale 0.67: 0.558333, 0.555556, -0.220833, -0.222222, 1072x600 into 1920x1080) and the output size in pixels (two words) at +64, where the pixel is trunc(output size * the viewport's texture coordinate). Its result is clamped to
+// [0, 3.5] (its input * 1 / 3.5, clamped to 0-1, * 3.5). With DM_UPSCALER=metalfx a draw of such a shader is replaced by MetalFX's spatial scaler in HDR mode (linear colour) from the
+// input rectangle (the origin, con0.xy * the output size) to the viewport (up_mfx_scale): the input copied to the origin of the scaler's RGBA16F texture, the RGBA16F result drawn into
+// the viewport (MetalFX's own R11G11B10F writes come out low). Anything this does not prove (a scissor or viewport that does not cover the output, blending, a lower-left origin, constants
+// that are not FSR's for this texture and viewport, no enlargement) keeps the game's draw. In HDR (nvn_hdr.inc) the tone map writes its picture divided by the headroom P for agl's FXAA,
+// which runs between it and EASU on that range; the expansion that multiplies it back is then the input copy's (gain P), so MetalFX scales the scene in its own range, values above 1
+// included, instead of the blend on the draw's output (hdr_expand_gain). EASU keeps its result inside its input's neighbourhood; MetalFX's sharpening overshoots at small highlights (the
+// torch's flame: 7.5 to 13 times SDR white in the drawable with headroom 4, where the input holds at most 4), so the draw back holds the result to the input's range, [0, gain] (fsg)
+static int keys_has(const char *list, const char *key);   // nvn_hdr.inc
+static int up_easu_wanted(NvShader *fs) {
+    if (fs->up_mfx) return fs->up_mfx == 1;
+    fs->up_mfx = 2;
+    if (sizeof(DM_GAME_UPSCALER_EASU) <= 1 || !keys_has(DM_GAME_UPSCALER_EASU, fs->key) || !up_mfx_on()) return 0;
+    int nt = 0, ni = 0, reg = -1;
+    for (int i = 0; i < fs->rf.nb; i++) { int k = fs->rf.b[i].kind; if (k == NVN_RB_TEX) { nt++; reg = fs->rf.b[i].reg; } else if (k == NVN_RB_IMG) ni++; }
+    if (nt != 1 || ni || reg != 0) { MLOG("[RED] upscaler %s: an EASU draw that reads %d textures (last at %d) and %d images, not texture 0 alone: the game's draw runs", fs->key, nt, reg, ni); return 0; }
+    MLOG("upscaler %s: FSR 1 EASU draw, drawn by MetalFX's spatial scaler in HDR mode (linear colour)", fs->key);
+    fs->up_mfx = 1;
+    return 1;
+}
+static float hdr_expand_gain(void);   // nvn_hdr.inc: marks an expansion draw seen this frame and returns the factor it multiplies by (1: none)
+static int up_easu_draw(NvShader *fs) {
+    static int said[8];
+#define EASU_NO(i, ...) do { if (!said[i]++) MLOG("[RED] upscaler %s: " __VA_ARGS__); return 0; } while (0)
+    if (g_rc_skip || !R.has_rt || R.rt.n < 1 || !R.rt.color[0] || !up_mfx_now()) return 0;   // DM_UPSCALER=ab: a phase that is off; auto: the render scale is 1; the game's draw
+    if (S.color.blend_en & 1) EASU_NO(0, "the EASU draw blends: the game's draw runs", fs->key);
+    if ((S.chmask.mask & 7) != 7) EASU_NO(1, "the EASU draw does not write red, green and blue (mask %#x): the game's draw runs", fs->key, (unsigned)(S.chmask.mask & 0xf));
+    uint32_t sw; memcpy(&sw, S.vp_sw[0], 4);
+    if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed) || sw) EASU_NO(2, "the EASU draw has a lower-left origin or a viewport swizzle: the game's draw runs", fs->key);
+    const tex_t *rt = R.rt.color[0]; id<MTLTexture> out = tex_mtl(rt); uint64_t ser; int lv, sl; rt_sub(&R.rt, 0, &ser, &lv, &sl);
+    int tid = (int)(tex_slot_h(S.tex[1], S.img[1], 0) & 0xfffff);
+    os_unfair_lock_lock(&g_rmu); id<MTLTexture> in = tid ? tex_by_id(tid) : nil; os_unfair_lock_unlock(&g_rmu);
+    if (!in || !out || in == out || in.textureType != MTLTextureType2D || out.textureType != MTLTextureType2D || in.sampleCount != 1 || out.sampleCount != 1 || fmt_int_or_ds(in.pixelFormat) ||
+        fmt_int_or_ds(out.pixelFormat) || mtl_fmt_block(out.pixelFormat)) EASU_NO(3, "the EASU draw's texture or target is not a 2D colour texture MetalFX takes: the game's draw runs", fs->key);
+    NSUInteger tw = MAX(out.width >> lv, 1ul), th = MAX(out.height >> lv, 1ul);
+    double vx = S.has_vp ? S.vp[0][0] : 0, vy = S.has_vp ? S.vp[0][1] : 0, vw = S.has_vp ? S.vp[0][2] : tw, vh = S.has_vp ? S.vp[0][3] : th;
+    float c[4]; uint32_t osz[2];
+    ubo_read(1, 0, 0, sizeof c, c); ubo_read(1, 0, 64, sizeof osz, osz);
+    long iw = lround((double)c[0] * osz[0]), ih = lround((double)c[1] * osz[1]);
+    if (vx != floor(vx) || vy != floor(vy) || vx < 0 || vy < 0 || vw != osz[0] || vh != osz[1] || vx + vw > tw || vy + vh > th)
+        EASU_NO(4, "the EASU draw's viewport %g,%g %gx%g is not the output size %ux%u inside the %lux%lu target: the game's draw runs", fs->key, vx, vy, vw, vh, osz[0], osz[1], (unsigned long)tw, (unsigned long)th);
+    if (R.has_sc && (R.sc.x > vx || R.sc.y > vy || (double)R.sc.x + R.sc.w < vx + vw || (double)R.sc.y + R.sc.h < vy + vh))
+        EASU_NO(5, "the EASU draw's scissor %d,%d %dx%d cuts its viewport: the game's draw runs", fs->key, (int)R.sc.x, (int)R.sc.y, (int)R.sc.w, (int)R.sc.h);
+    if (iw < 1 || ih < 1 || iw > (long)in.width || ih > (long)in.height || fabs((double)c[0] * osz[0] - iw) > 0.01 || fabs((double)c[1] * osz[1] - ih) > 0.01 ||
+        fabs(c[2] - (0.5 * c[0] - 0.5)) > 1e-4 || fabs(c[3] - (0.5 * c[1] - 0.5)) > 1e-4)
+        EASU_NO(6, "the EASU draw's constants (%g, %g, %g, %g) are not FSR's con0 for a texture of %lux%lu and an output of %ux%u: the game's draw runs", fs->key, c[0], c[1], c[2], c[3],
+                (unsigned long)in.width, (unsigned long)in.height, osz[0], osz[1]);
+#undef EASU_NO
+    if (iw > (long)vw || ih > (long)vh || (iw == (long)vw && ih == (long)vh)) return 0;   // not an enlargement, which is all MetalFX does: the game's draw
+    float gain = fs->hdr_role == HR_EXPAND ? hdr_expand_gain() : 1;
+    NVNcopyRegion ir = {0, 0, 0, (int)iw, (int)ih, 1}, orr = {(int)vx, (int)vy, 0, (int)vw, (int)vh, 1};
+    rp_flush();   // the pass's clears and draws so far land first: the scaler's input copy and the draw back are passes of their own
+    if (!up_mfx_scale(fs->key, in, ir, out, (unsigned)lv, (unsigned)sl, orr, UP_COLOR_LINEAR, gain, gain)) return 0;   // held to [0, gain], the input's range (see above)
+    g_pso_dirty = g_dss_dirty = 1;
+    { static uint64_t n; static float said_gain = -1; n++;
+      if (n == 1 || fabsf(gain - said_gain) > 0.05f) { said_gain = gain; MLOG("upscaler %s: EASU drawn by MetalFX, %ldx%ld → %gx%g at %g,%g of %lux%lu (format %lu), input multiplied by %.3f%s", fs->key, iw, ih, vw, vh, vx, vy,
+                                                  (unsigned long)tw, (unsigned long)th, (unsigned long)out.pixelFormat, gain, gain != 1 ? " (the HDR expansion of the tone map's picture)" : ""); } }
     return 1;
 }
 // The present pass: src's valid rectangle drawn into dst (the drawable, or a screenshot's texture) as present_encode draws it, through MetalFX first where fx_encode takes it
@@ -16464,7 +16573,7 @@ static int up_mfx_encode(NvShader *cs) {
 static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], id<MTLBuffer> uvb, fx_state *fx) {
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
     int pv = present_variant(present_raw_src(src), dst.pixelFormat);
-    if (pv != PV_RAW || pf_float(dst.pixelFormat)) fx = NULL;   // MetalFX's scaler takes gamma bytes into gamma bytes (fx_encode): an HDR present scales bilinearly
+    if (pv != PV_RAW) fx = NULL;   // MetalFX's scaler takes gamma bytes into gamma bytes (perceptual mode) or a float picture into the float layer (HDR, HDR mode; fx_encode): a present that converts scales bilinearly
     id<MTLRenderPipelineState> pso = present_pipeline(dst.pixelFormat, pv);
     double dw = dst.width, dh = dst.height;
     MTLViewport vp = present_fit(src, dw, dh);

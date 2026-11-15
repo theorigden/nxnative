@@ -212,6 +212,10 @@ def header_one(g):
         if any(not re.fullmatch(r'[0-9a-f]{16}', x) for x in ks): sys.exit(f'{g.id}: {k} takes 16-digit lowercase shader keys: {" ".join(ks)}')
         hdr_keys[k] = ks
     ups = upscaler_keys(g)   # the game's own upscaler shaders, which DM_UPSCALER=metalfx (the launcher's Game's upscaler) replaces with MetalFX's spatial scaler (nvn_mtl.m up_mfx_encode)
+    easu = g.words('upscaler_easu', '')   # fragment shaders that are AMD FSR 1's EASU, drawn into the output by one draw, which DM_UPSCALER=metalfx also replaces (nvn_mtl.m up_easu_draw)
+    if any(not re.fullmatch(r'[0-9a-f]{16}', x) for x in easu): sys.exit(f'{g.id}: upscaler_easu takes 16-digit lowercase shader keys: {" ".join(easu)}')
+    upd = g.get('upscaler_default', 'game')   # DM_UPSCALER when the player chose nothing (nvn_mtl.m up_mfx_on): game, metalfx, or auto (MetalFX while the render scale is below 1)
+    if upd not in ('game', 'metalfx', 'auto'): sys.exit(f'{g.id}: upscaler_default must be game, metalfx or auto: {upd}')
     dbr = g.get('draw_barriers', 'full')   # how draw passes are ordered (nvn_mtl.m barrier_game): full = each waits for all earlier GPU work, game = by the game's own barriers, so vertex work overlaps the previous pass's fragments
     if dbr not in ('full', 'game'): sys.exit(f'{g.id}: draw_barriers must be full or game: {dbr}')
     om = g.get('op_mode', 'console')   # the operation mode reported at start (hle_oe.c dm_opmode; DM_OPMODE overrides): console = docked, handheld = touch screen in use (Super Mario Galaxy's pointer)
@@ -268,7 +272,7 @@ def header_one(g):
          f'#define DM_GAME_TEX_DIRTY_UPLOAD {int(tdu == "on")}',
          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
          f'#define DM_GAME_DRAW_BARRIERS_GAME {int(dbr == "game")}',
-         f'#define DM_GAME_UPSCALER_KEYS {q(",".join(ups))}', f'#define DM_GAME_UPSCALER_N {len(ups)}',
+         f'#define DM_GAME_UPSCALER_KEYS {q(",".join(ups))}', f'#define DM_GAME_UPSCALER_EASU {q(",".join(easu))}', f'#define DM_GAME_UPSCALER_DEFAULT {q(upd)}', f'#define DM_GAME_UPSCALER_N {len(ups) + len(easu)}',
          *(f'#define DM_GAME_{k.upper()} {q(",".join(v))}' for k, v in hdr_keys.items()), f'#define DM_GAME_TONEMAP_N {len(hdr_keys["tonemap_agl"])}',
          f'#define DM_GAME_HDR_N {int(bool(hdr_keys["hdr_final"]))}',
          f'#define DM_GAME_VCONV_RANGE {int(vcr == "on")}',

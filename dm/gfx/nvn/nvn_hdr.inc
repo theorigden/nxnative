@@ -170,6 +170,9 @@ static const tex_t *hdr_present_swap(const tex_t *t, tex_t *tmp) {
     }
     return t;
 }
+// An expansion draw that something else draws instead (the game's EASU by MetalFX, nvn_mtl.m up_easu_draw): seen this frame, as hdr_draw_begin marks it, so the tone map stays armed;
+// returns the factor its output is to be multiplied by (the headroom the tone map divided by; 1 when not armed)
+static float hdr_expand_gain(void) { g_hx_seen = atomic_load(&g_cur_frame) + 1; return g_tm_gain; }
 static struct { int on; blend_st b0; uint32_t en; float bc[4]; } g_hx_save;
 static int hdr_draw_begin(void) {
     if (!S.prog) return 0;

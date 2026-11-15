@@ -54,11 +54,11 @@ MAP = ('# kind: evidence  Test shaders\n# column 5 records where each key first 
        'cs_other.bin\t10\tcompute\tba079f68ae288dba\t/Movie/Ndve/Ndve-Nvn2-vid_seq5.dat.zs#NDVE@0x1423e8\n')   # that file's own movie network: not the pack's
 
 
-def macros(shader_map):
-    """The upscaler macros of a synthetic profile's header, with this shader map (None: none)"""
+def macros(shader_map, extra=''):
+    """The upscaler macros of a synthetic profile's header, with this shader map (None: none) and extra profile rows"""
     with tempfile.TemporaryDirectory() as d:
         Path(d, ID).mkdir()
-        (Path(d, ID) / 'game.tsv').write_text(TSV)
+        (Path(d, ID) / 'game.tsv').write_text(TSV + extra)
         if shader_map is not None: (Path(d, ID) / 'shader_map.tsv').write_text(shader_map)
         subprocess.run([sys.executable, str(GAME), 'header', ID, str(Path(d, ID) / 'game.h')], env={**os.environ, 'DM_GAMES_DIR': d}, check=True, capture_output=True)
         return [l for l in (Path(d, ID) / 'game.h').read_text().splitlines() if 'UPSCALER' in l]
@@ -66,10 +66,15 @@ def macros(shader_map):
 
 class UpscalerKeys(unittest.TestCase):
     def test_from_shader_map(self):
-        none = ['#define DM_GAME_UPSCALER_KEYS ""', '#define DM_GAME_UPSCALER_N 0']   # the launcher hides the setting
+        none = ['#define DM_GAME_UPSCALER_KEYS ""', '#define DM_GAME_UPSCALER_EASU ""', '#define DM_GAME_UPSCALER_DEFAULT "game"', '#define DM_GAME_UPSCALER_N 0']   # the launcher hides the setting
         self.assertEqual(macros(None), none)
         self.assertEqual(macros(MAP.split('cs_other.bin')[0]), none)
-        self.assertEqual(macros(MAP), ['#define DM_GAME_UPSCALER_KEYS "7629d857a0a93833,805f2de96bd6d78d,c2fc2ddd604c25e7,c56db3d5a0f1b5af,ddc729bcdb4c8df9,fa3033d05c0a41d6"', '#define DM_GAME_UPSCALER_N 6'])
+        self.assertEqual(macros(MAP), ['#define DM_GAME_UPSCALER_KEYS "7629d857a0a93833,805f2de96bd6d78d,c2fc2ddd604c25e7,c56db3d5a0f1b5af,ddc729bcdb4c8df9,fa3033d05c0a41d6"',
+                                       '#define DM_GAME_UPSCALER_EASU ""', '#define DM_GAME_UPSCALER_DEFAULT "game"', '#define DM_GAME_UPSCALER_N 6'])
+
+    def test_easu_draw(self):   # FSR 1's EASU drawn as a fragment shader (Tears of the Kingdom): named by the profile, counted for the launcher's row
+        self.assertEqual(macros(None, 'upscaler_easu\tac58fc18eda5f387\nupscaler_default\tauto\n'),
+                         ['#define DM_GAME_UPSCALER_KEYS ""', '#define DM_GAME_UPSCALER_EASU "ac58fc18eda5f387"', '#define DM_GAME_UPSCALER_DEFAULT "auto"', '#define DM_GAME_UPSCALER_N 1'])
 
 
 if __name__ == '__main__':

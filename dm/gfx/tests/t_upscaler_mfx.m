@@ -236,6 +236,22 @@ int main(void) { @autoreleasepool {
         CHECK(g_up_mfx_straight[0] == s_in && g_up_mfx_straight[1] == s_out + 1, "a square-rooted whole RGBA16F input still goes through the squaring copy; the output straight");
         CHECK(matches(written, squared, MTLRegionMake2D(0, 0, 1920, 1080), black), "the square-rooted RGBA16F input comes out squared into linear colour");
         named->up_color = UP_COLOR_LINEAR;
+        // A gain on the way in (a game's EASU draw in HDR, up_easu_draw: its input is the tone map's picture divided by the headroom): a whole R11G11B10F input that would go straight is
+        // copied, multiplied, into the scaler's input, and MetalFX in HDR mode keeps the values above 1: 0.5, 0.25, 0.0625 at gain 4 → 2, 1, 0.25 in R11G11B10F (blue, the 5-bit mantissa, kept small as above)
+        { const float base[3] = {0.5f, 0.25f, 0.0625f}, gained[3] = {2.0f, 1.0f, 0.25f};
+          fill(tex_mtl(&r11), MTLClearColorMake(base[0], base[1], base[2], 1)); fill(tex_mtl(&r11_out), MTLClearColorMake(0, 0, 0, 1));
+          os_unfair_lock_lock(&g_rmu); id<MTLTexture> gin = tex_by_id(706), gout = tex_by_id(707); os_unfair_lock_unlock(&g_rmu);
+          NVNcopyRegion gir = {0, 0, 0, 960, 540, 1}, gor = {0, 0, 0, 1920, 1080, 1};
+          s_in = g_up_mfx_straight[0]; mtl_sub_begin();
+          CHECK(up_mfx_scale("gain", gin, gir, gout, 0, 0, gor, UP_COLOR_LINEAR, 4, INFINITY), "MetalFX takes an input with a gain");
+          CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "the gained submission completes");
+          CHECK(g_up_mfx_straight[0] == s_in, "an input with a gain goes through the copy, never straight");
+          CHECK(matches_r11(tex_mtl(&r11_out), gained), "the gained input comes out multiplied, above 1 kept");
+          // and held to a bound on the draw back (an EASU draw holds MetalFX's overshoot to its input's range): red 2 to 1.5, the others as they were
+          const float held[3] = {1.5f, 1.0f, 0.25f}; fill(tex_mtl(&r11_out), MTLClearColorMake(0, 0, 0, 1)); mtl_sub_begin();
+          CHECK(up_mfx_scale("gain", gin, gir, gout, 0, 0, gor, UP_COLOR_LINEAR, 4, 1.5f), "MetalFX takes an input with a gain and a bound");
+          CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error(), "the bounded submission completes");
+          CHECK(matches_r11(tex_mtl(&r11_out), held), "the result is held to the bound"); }
         NvShader *encoded_out = upscaler(key); encoded_out->up_color = UP_COLOR_KEEP;
         CHECK(!up_mfx_wanted(encoded_out), "a named shader whose output stays encoded is left to its shader");
         S.tex[5][0] = 701;
