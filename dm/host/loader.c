@@ -351,22 +351,26 @@ void dm_fps_state_apply(void) {
     const char *dr = getenv("DM_DYNAMIC_RESOLUTION"); uint32_t dyn = dr && !strcmp(dr, "1");
     if (dr && strcmp(dr, "0") && strcmp(dr, "1")) LOG("[RED] DM_DYNAMIC_RESOLUTION=%s: must be 0 or 1; keeping full resolution", dr);
     memcpy(dm_fps_state + 0x40, &dyn, sizeof dyn);
-    // Screen shape: DM_SCREEN_ASPECT, the screen's width / height between 1.3 and 1.77, makes the builds with screen-shape stubs
-    // (Breath of the Wild 1.9.0's patches.py) render that shape: the output keeps its width (1920) and takes the height that gives the ratio, a multiple of 48 so the
-    // 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 its float; 0 = 16:9
+    // Screen shape: DM_SCREEN_ASPECT, the screen's width / height from 1.3 to 2.4 (16:9 itself, 1.77 to 1.78, is no shape), makes the builds with screen-shape stubs
+    // (Breath of the Wild 1.9.0's patches.py) render that shape. Taller than 16:9: the output keeps its width (1920) and takes the height that gives the ratio, a multiple of
+    // 48 so the 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896. Wider than 16:9 (an iPhone's 2.17:1; only profiles with output_size, whose
+    // stubs take an output width): the output keeps its height (1080, or DM_OUTPUT_RES's) and takes the width, a multiple of 12 (the 3D views are 5/6 of it and the layout
+    // space 2/3): 2.167 → 2340x1080 and 1560x720. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 its float, +0x68 u32 output width, +0x6c u32 layout width,
+    // +0x70 its float; 0 = 16:9 (1920 and 1280 wide)
     const char *as = getenv("DM_SCREEN_ASPECT");
     // auto: the screen's own shape. The iOS front end resolves it before the game starts (its window); on the Mac front_screen_aspect_auto gives the shape of the screen the
-    // window opens on, its whole frame with a camera housing's row (fullscreen covers it: fs_whole_enter), 16:9 when it is outside 1.3 to 1.77 (a 16:9 display such as the Pro Display XDR)
+    // window opens on, its whole frame with a camera housing's row (fullscreen covers it: fs_whole_enter), 16:9 when it is outside 1.3 to 2.4 or within 1.77 to 1.78 (a 16:9
+    // display such as the Pro Display XDR)
     char autov[16];
     if (as && !strcmp(as, "auto")) {
         double r = front_screen_aspect_auto();
-        if (r >= 1.3 && r < 1.77) { snprintf(autov, sizeof autov, "%.3f", r); as = autov; } else as = "0";
+        if (r >= 1.3 && r <= 2.4 && !(r >= 1.77 && r < 1.78)) { snprintf(autov, sizeof autov, "%.3f", r); as = autov; } else as = "0";
         LOG("%s: picture shape auto: the screen is %.3f:1 → %s", g_fps_mod, r, as);
     }
     // Output size: DM_OUTPUT_RES=native (the pixels of the display the game opens on: a 16" MacBook Pro's 3456x2234, a 4K TV's 3840x2160) or <width>x<height> renders the
     // builds whose stubs follow an output width too (profile output_size on: Tears of the Kingdom 1.4.3) at that width, in the screen shape's height (16:9 without one); the
-    // layout space stays 1280 wide. State +0x68 u32 output width (0 = 1920). 0 or unset: 1920 wide
-    uint32_t ow = 0;
+    // layout space stays 1280 wide (a screen wider than 16:9 takes DM_OUTPUT_RES's height instead, below). State +0x68 u32 output width (0 = 1920). 0 or unset: 1920 wide
+    uint32_t ow = 0, ohr = 0;   // ohr: DM_OUTPUT_RES's height, for a wider screen
     const char *orv = getenv("DM_OUTPUT_RES");
     if (orv && *orv && strcmp(orv, "0")) {
         int pw = 0, ph = 0;
@@ -376,47 +380,64 @@ void dm_fps_state_apply(void) {
             else LOG("%s: output size native: the display's %dx%d (DM_OUTPUT_RES)", g_fps_mod, pw, ph);
         }
         else if (sscanf(orv, "%dx%d", &pw, &ph) != 2) LOG("[RED] DM_OUTPUT_RES=%s: native or <width>x<height>; keeping 1920 wide", orv);
-        if (pw >= 640 && pw <= 7680 && ph > 0) ow = (uint32_t)pw & ~1u;
-        else if (pw || ph) LOG("[RED] DM_OUTPUT_RES=%s: %dx%d is outside 640 to 7680 wide; keeping 1920 wide", orv, pw, ph);
+        if (pw >= 640 && pw <= 7680 && ph >= 360 && ph <= 4320) { ow = (uint32_t)pw & ~1u; ohr = (uint32_t)ph & ~1u; }
+        else if (pw || ph) LOG("[RED] DM_OUTPUT_RES=%s: %dx%d is outside 640 to 7680 wide or 360 to 4320 high; keeping 1920 wide", orv, pw, ph);
     }
     float a = 0;   // the screen shape's width / height, 0 = 16:9
     if (as && *as && strcmp(as, "0") && strcmp(as, "auto")) {   // 0: 16:9
         char *end; a = strtof(as, &end);
-        if (end == as || *end || !(a >= 1.3f && a < 1.77f)) { LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 1.77; keeping 16:9", as); a = 0; }
+        if (end == as || *end || !(a >= 1.3f && a <= 2.4f)) { LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 2.4; keeping 16:9", as); a = 0; }
+        else if (a >= 1.77f && a < 1.78f) a = 0;   // 16:9 itself
+        else if (a > 1.78f && !DM_GAME_OUTPUT_SIZE) { LOG("%s: screen shape %.3f is wider than 16:9: this game's profile follows only taller ones (no output_size); keeping 16:9", g_fps_mod, a); a = 0; }
     }
     if (a > 0 || ow) {
         {
-            uint32_t oh, lh; float lf;
-            if (!ow) { oh = (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48; lh = oh * 2 / 3; lf = (float)lh; }   // 1920 wide: a multiple of 48 keeps the layout whole
+            uint32_t oh, lh, lw = 0; float lf, lwf = 0;
+            if (a > 1.78f) {   // wider: the height stays (1080 or DM_OUTPUT_RES's), the width follows; the layout stays 720 high and widens
+                oh = ohr ? ohr : 1080; ow = (uint32_t)((float)oh * a / 12.0f + 0.5f) * 12; lh = 720; lf = 720.0f;
+                lwf = 720.0f * (float)ow / (float)oh; lw = (uint32_t)(lwf + 0.5f);
+            }
+            else if (!ow) { oh = (uint32_t)(1920.0f / a / 48.0f + 0.5f) * 48; lh = oh * 2 / 3; lf = (float)lh; }   // 1920 wide: a multiple of 48 keeps the layout whole
             else { float r = a > 0 ? a : 16.0f / 9.0f; oh = (uint32_t)((float)ow / r + 0.5f) & ~1u; lf = 1280.0f * (float)oh / (float)ow; lh = (uint32_t)(lf + 0.5f); if (a == 0) { lf = 720.0f; lh = 720; } }
             if (a == 0) a = (float)(ow ? ow : 1920) / (float)oh;   // 16:9 at a larger size: the ratio below is 16:9, so the field of view and the HUD keep theirs
             uint32_t w4 = ow; memcpy(dm_fps_state + 0x68, &w4, 4);
             memcpy(dm_fps_state + 0x48, &oh, 4); memcpy(dm_fps_state + 0x4c, &lh, 4); memcpy(dm_fps_state + 0x50, &lf, 4);
+            memcpy(dm_fps_state + 0x6c, &lw, 4); memcpy(dm_fps_state + 0x70, &lwf, 4);
             extern void mtl_present_screen(uint32_t w, uint32_t h); mtl_present_screen(ow ? ow : 1920, oh);   // the picture's shape for a texture that follows it (nvn_mtl.m present_shape)
             const char *ms = getenv("DM_SCREEN_ASPECT_SITES"); uint32_t mask = ms ? (uint32_t)strtoul(ms, NULL, 0) : 0xffffffffu;   // the stubs of the game's own conversions, one bit each (+0x54)
             memcpy(dm_fps_state + 0x54, &mask, 4);
             if (ms) LOG("%s: screen shape: conversion sites %#x (DM_SCREEN_ASPECT_SITES)", g_fps_mod, mask);
-            // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below (patches.py's sead::PerspectiveProjection stubs)
-            float r = (float)(ow ? ow : 1920) / (float)oh, k = (16.0f / 9.0f) / r, tol = 0.01f;
-            if (fabsf(k - 1.0f) < 0.002f) { r = 0; k = 1; }   // 16:9: the views keep their angle (the stubs are off)
+            // The field of view: views of the screen's ratio (the scene, the HUD's camera) keep 16:9's sides and show more above and below on a taller screen (k > 1 widens the
+            // vertical angle; patches.py's sead::PerspectiveProjection stubs); on a wider one they keep 16:9's vertical angle and show more at the sides (k = 1: only the
+            // aspect changes)
+            float r = (float)(ow ? ow : 1920) / (float)oh, k = fmaxf((16.0f / 9.0f) / r, 1.0f), tol = 0.01f;
+            if (fabsf(r * 9.0f / 16.0f - 1.0f) < 0.002f) { r = 0; k = 1; }   // 16:9: the views keep their angle (the stubs are off)
             const char *fo = getenv("DM_SCREEN_FOV"); if (fo && !strcmp(fo, "off")) tol = -1.0f;   // trials: the scene keeps the game's vertical angle (no view matches); the HUD camera still widens
             memcpy(dm_fps_state + 0x58, &r, 4); memcpy(dm_fps_state + 0x5c, &k, 4); memcpy(dm_fps_state + 0x60, &tol, 4);
             float wide = 16.0f / 9.0f, wtol = 0.001f, far = 10000.0f;   // the HUD camera's projection: 16:9, near 1, far 10000 (+0x74 / +0x78 / +0x7c)
             memcpy(dm_fps_state + 0x74, &wide, 4); memcpy(dm_fps_state + 0x78, &wtol, 4); memcpy(dm_fps_state + 0x7c, &far, 4);
-            // The HUD at the taller edges (patches.py duo_anchor.c, +0x80..+0x98): the shift (half the layout height over 360), the stretch of full-screen panes, the edge rule's
-            // distance, the listed corner widgets' distance, a full-screen pane's width and height in the 1280x720 space, and the tallest one still stretched (a menu's
-            // background is about 720 tall, the weapon wheel's gradient 1280; the map's tiles are left alone anyway)
+            // The HUD at the taller edges (patches.py duo_anchor.c, +0x80..+0x9c): the shift (half the layout height over 360), the vertical stretch of full-screen panes, the edge
+            // rule's distance, the listed corner widgets' distance, a full-screen pane's width and height in the 1280x720 space, the tallest one still stretched (a menu's
+            // background is about 720 tall, the weapon wheel's gradient 1280; the map's tiles are left alone anyway), and the horizontal stretch of full-screen panes (a wider
+            // screen: its layout width over 1280; the HUD itself stays in the 16:9 middle, which is the safe area on an iPhone in landscape)
             // (Mac, a Master Mode save: an edge distance of 280 takes the menus' title bars (286 to 320), the map's frame pieces (284 to 360) and the bottom guides (-318) along
             // as whole rows; 330 left the title bars and the rupee count in the middle while the hearts moved. Text moves with its widget since the rule runs where global
             // matrices are computed. Only panes as wide and as tall as the screen are stretched: a width of 0 stretched the inventory's half-width side panel past its top
             // and bottom bars). DM_SCREEN_HUD=<edge>,<listed>,<full-screen width>,<full-screen height>[,<tallest>]
             // overrides them for trials
-            float anc[7] = {lf / 2 - 360.0f, lf / 720.0f, 280.0f, 100.0f, 1270.0f, 710.0f, 1300.0f};
+            float anc[8] = {lf / 2 - 360.0f, lf / 720.0f, 280.0f, 100.0f, 1270.0f, 710.0f, 1300.0f, lwf > 0 ? lwf / 1280.0f : 1.0f};
             const char *hv = getenv("DM_SCREEN_HUD");
             if (hv && sscanf(hv, "%f,%f,%f,%f,%f", &anc[2], &anc[3], &anc[4], &anc[5], &anc[6]) < 4) LOG("[RED] DM_SCREEN_HUD=%s: <edge>,<listed>,<full width>,<full height>[,<tallest>]; keeping the rest", hv);
             memcpy(dm_fps_state + 0x80, anc, sizeof anc);
-            LOG("%s: screen shape: HUD moves out by %.0f (edge %.0f, listed widgets %.0f), panes %.0fx%.0f or larger stretched %.3f", g_fps_mod, anc[0], anc[2], anc[3], anc[4], anc[5], anc[1]);
-            LOG("%s: screen shape %.3f: output %ux%u, layout 1280x%.1f (DM_SCREEN_ASPECT, DM_OUTPUT_RES; only builds with screen-shape stubs follow it)", g_fps_mod, a, ow ? ow : 1920, oh, lf);
+            // The HUD's orthographic projection (+0xa0 / +0xa4 floats, patches.py's stub of the 1920x1080 one): the screen in the 1920x1080 space's units, as large as fits
+            // around it, centred: 1920 x (1920 x height / width) on a taller output, (1080 x width / height) x 1080 on a wider one, 1920x1080 at 16:9 of any size; so the
+            // HUD keeps its size and stays in the middle 16:9
+            float hph = fmaxf(1080.0f, 1920.0f * (float)oh / (float)(ow ? ow : 1920)), hpw = hph * (float)(ow ? ow : 1920) / (float)oh;
+            memcpy(dm_fps_state + 0xa0, &hpw, 4); memcpy(dm_fps_state + 0xa4, &hph, 4);
+            LOG("%s: screen shape: HUD moves out by %.0f (edge %.0f, listed widgets %.0f), panes %.0fx%.0f or larger stretched %.3f high and %.3f wide, HUD projection %.1fx%.1f",
+                g_fps_mod, anc[0], anc[2], anc[3], anc[4], anc[5], anc[1], anc[7], hpw, hph);
+            LOG("%s: screen shape %.3f: output %ux%u, layout %.1fx%.1f (DM_SCREEN_ASPECT, DM_OUTPUT_RES; only builds with screen-shape stubs follow it)", g_fps_mod, a, ow ? ow : 1920, oh,
+                lwf > 0 ? lwf : 1280.0f, lf);
         }
     }
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
