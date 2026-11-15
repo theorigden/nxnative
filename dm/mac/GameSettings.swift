@@ -87,11 +87,14 @@ final class GameSettings {
         front_settings_closed()
     }
 
-    // The rows in the order the window shows them (basic first, then Advanced settings when it is open), without those an env file fixes
+    // The rows in the order the window shows them (basic first, then those under Advanced settings, which opens when the selection reaches them), without those an env file fixes
     private var order: [Setting] {
-        var rows = model.sections(basic: true).flatMap { model.rows(in: $0, basic: true) }
-        if UserDefaults.standard.bool(forKey: "window.advanced") { rows += model.sections(basic: false).flatMap { model.rows(in: $0, basic: false) } }
+        let rows = model.sections(basic: true).flatMap { model.rows(in: $0, basic: true) } + model.sections(basic: false).flatMap { model.rows(in: $0, basic: false) }
         return rows.filter { !model.fixed.contains($0.env) }
+    }
+    private func select(_ s: Setting) {
+        if !s.basic && !UserDefaults.standard.bool(forKey: "window.advanced") { UserDefaults.standard.set(true, forKey: "window.advanced") }   // LauncherView's @AppStorage opens it
+        model.focus = s.env
     }
 
     // A controller or the arrow keys: 0 up, 1 down, 2 left, 3 right (the previous or next value), 4 A (a toggle flips, a choice takes its next value), 5 B (closes)
@@ -101,10 +104,10 @@ final class GameSettings {
         guard !rows.isEmpty else { return }
         let i = rows.firstIndex { $0.env == model.focus }
         switch code {
-        case 0: model.focus = rows[max(0, (i ?? rows.count) - 1)].env
-        case 1: model.focus = rows[min(rows.count - 1, (i ?? -1) + 1)].env
+        case 0: select(rows[max(0, (i ?? rows.count) - 1)])
+        case 1: select(rows[min(rows.count - 1, (i ?? -1) + 1)])
         case 2, 3, 4:
-            guard let i else { model.focus = rows[0].env; return }
+            guard let i else { select(rows[0]); return }
             step(rows[i], code == 2 ? -1 : 1, wrap: code == 4)
         default: break
         }

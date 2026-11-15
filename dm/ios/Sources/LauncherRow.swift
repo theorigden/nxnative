@@ -57,7 +57,8 @@ struct SettingRow: View {
             }
         }
         .disabled(locked)
-        .listRowBackground(m.focus == s.env ? Color.accentColor.opacity(0.22) : nil)   // the row a controller has selected (GameSettings.swift)
+        .padding(m.focus == s.env ? 6 : 0)
+        .background(RoundedRectangle(cornerRadius: 6).fill(m.focus == s.env ? Color.accentColor.opacity(0.2) : Color.clear))   // the row a controller has selected (GameSettings.swift)
         .id(s.env)
     }
 }

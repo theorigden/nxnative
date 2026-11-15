@@ -221,7 +221,7 @@ void hid_keys_init(void) {
 // DM_CTL=<file> (Mac, for driving a game step by step from a shell): the host reads the lines appended to the file (polled every 100 ms) and acts on each at once:
 //   "key[+key][~hold]" presses as a DM_KEYS step does (hold 0.15 s by default), "shot <path>" saves the next presented frame as a PNG (dm_gfx_shot_at), "passdump <n>" dumps the
 //   render passes of the next n frames as DM_NVN_PASSDUMP does (to stderr, the run's log), "texdump <path with %d>" saves the colour targets of the next frame as DM_NVN_TEXDUMP does,
-//   "menu open" / "menu close" / "menu toggle" works the Mac's settings window over the game, "menunav <0-5>" moves in it as a controller does (up, down, left, right, A, B), and
+//   "menu open" / "menu close" / "menu toggle" works the Mac's settings window over the game, "menunav <0-5>" moves in it as a controller does (up, down, left, right, A, B), "menushot <path>" saves it as drawn, and
 //   "set <VAR>=<value>" makes a choice there, applied at once when the running game takes it and saved as the window saves it (front_mac.m front_settings_ctl, GameSettings.swift),
 //   "env KEY=VALUE" sets a switch read at the time of use (DM_NVN_SNAPRAW for the next texdump), "cvarf <main offset> <value>" sets an Unreal float console variable
 //   (hle_fpslock.c dm_ctl_cvar_f32; "cvari" an int one), "peek <address> <count>" logs that many floats of guest memory, "memdump <address> <bytes> <path>" saves guest memory

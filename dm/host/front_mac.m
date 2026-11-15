@@ -767,8 +767,10 @@ static void set_poll(void) {
         return;
     }
     uint64_t dir = m & (SB_UP | SB_DOWN | SB_LEFT | SB_RIGHT);
-    if (dir && !(now & dir) && t >= g_set_rep) { now |= dir; g_set_rep = t + 0.09; }   // a held direction repeats
-    else if (now & dir) g_set_rep = t + 0.4;
+    if (m != g_set_held) LOG("front end: settings: controller buttons %#llx", (unsigned long long)m);
+    if (now & dir) g_set_rep = t + 0.4;
+    else if (dir && t >= g_set_rep) { now |= dir; g_set_rep = t + 0.09; }   // a direction pressed while the window is open repeats while held
+    if (!dir) g_set_rep = INFINITY;   // one held since before it opened never does
     g_set_held = m;
     if (now & (SB_B | SB_HOME)) { dm_settings_panel_nav(5); return; }
     if (now & SB_UP) dm_settings_panel_nav(0);
@@ -782,7 +784,8 @@ static void settings_open(void) {
     if (!dm_settings_panel_open((__bridge void *)g_win.contentView)) { LOG("front end: settings: this game has no settings list"); return; }
     g_set_open = 1; g_set_settle = 0;
     input_release(); display_awake(g_win.isKeyWindow);   // the game gets nothing while it is open; the display stays awake as in play
-    g_set_held = set_buttons();   // the press that opened it does not count
+    g_set_held = set_buttons(); g_set_rep = INFINITY;   // the press that opened it does not count, nor repeats
+    if (g_set_held) LOG("front end: settings: controller buttons %#llx held at open", (unsigned long long)g_set_held);
     if (!g_set_timer) g_set_timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *t) { (void)t; set_poll(); }];
     LOG("front end: settings open over the game");
 }
