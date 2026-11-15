@@ -166,6 +166,8 @@ if [ "$GFXAPI" = vulkan ]; then MSLDIR=vk; elif [ "$GFXAPI" = gl ]; then MSLDIR=
 # FONT_PY names a python that has it)
 mkdir -p Gen/dm/font && "${FONT_PY:-python3}" "$DM/tools/make_shared_fonts.py" Gen/dm/font "${STD_FONT:-/System/Library/Fonts/Supplemental/Arial Unicode.ttf}" > /dev/null \
   || die "make_shared_fonts.py (pip install fonttools, or FONT_PY=python with fontTools; STD_FONT=a TTF)"
+# The game's own button-icon font in the other controllers' styles, for a profile with icon_font rows (game_icon_font.py; DM_BUTTON_ICONS)
+DM_GAME=$GAME "${FONT_PY:-python3}" "$DM/tools/game_icon_font.py" "$ROMFS" Gen/dm/font > /dev/null || t "[YELLOW] game_icon_font.py failed: the game's own button icons stay the Switch's"
 # App icon: the game's own icon (icon.jpg saved from the control data by nx_extract, the English 256x256 one). DM_ICON can point at another image; by default the icon.jpg next to the RomFS is used.
 # It is scaled to a 1024x1024 PNG in the asset catalog Gen/Assets.xcassets (a single-size app icon; actool generates the other sizes); with neither, no icon is set and the home-screen icon is blank.
 # The catalog is always created (the project always lists it, see project.yml); without an icon it stays empty and DM_APPICON is not set

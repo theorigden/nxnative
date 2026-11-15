@@ -25,7 +25,8 @@ void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stac
 void dm_guest_thread_join(void *tt) { (void)tt; }
 uint64_t now_ns(void) { return 0; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
-void *dm_pcmout_open(int ch) { (void)ch; return NULL; }
+static int opened_ch;   // the channel count of the last output opened
+void *dm_pcmout_open(int ch) { opened_ch = ch; return NULL; }
 void dm_pcmout_close(void *k) { (void)k; }
 void dm_pcmout_start(void *k) { (void)k; }
 int dm_pcmout_append(void *k, void *b) {
@@ -37,6 +38,8 @@ int dm_pcmout_append(void *k, void *b) {
 }
 void *dm_pcmout_released(void *k) { (void)k; return NULL; }
 void dm_pcmout_wait(void *k, int ms) { (void)k; (void)ms; }
+static int surround;   // dm_audio_surround's answer (hle_audio.c: DM_AUDIO_SURROUND)
+int dm_audio_surround(void) { return surround; }
 void hle_bind_system_event(void *ev, int ac) { (void)ev; (void)ac; }
 uint32_t hle_dup_readable_handle(uint32_t h) { return h; }
 
@@ -196,17 +199,19 @@ static void test_two_renderers(void) {
     int32_t quiet[2 * 160] = {0}, loud[2 * 160], out[2 * 240];
     for (int i = 0; i < 2 * 160; i++) loud[i] = 20000;
     memset(g_ar, 0, sizeof g_ar);
-    assert(up_3_2(&g_ar[0], loud, 160, out) == 240);
-    assert(up_3_2(&g_ar[1], quiet, 160, out) == 240);
+    assert(up_3_2(&g_ar[0], loud, 160, 2, out) == 240);
+    assert(up_3_2(&g_ar[1], quiet, 160, 2, out) == 240);
     for (int i = 0; i < 2 * 240; i++) assert(out[i] == 0);
     memset(g_ar, 0, sizeof g_ar);
 }
 
 // Issue #1336: AudioOut queues a block's pointer and copies its samples when the sound card asks, so a block is the renderer's own until it comes back released.
 // Renderer 0 queues all its blocks and none plays; renderer 1 then renders (blocks_exec marks each frame with its renderer) and renderer 0's blocks must still hold its samples
+static int blocks_ch = 2;   // the channels blocks_exec renders (out_ch)
 static void blocks_exec(void *obj, void *state) {
     (void)obj; (void)state;
-    for (int i = 0; i < SAMPLES * 2; i++) t_ar->frame[i] = (int16_t)(ar_index(t_ar) + 1);
+    if (blocks_ch == 6) atomic_store(&t_ar->out_ch, 6);
+    for (int i = 0; i < SAMPLES * blocks_ch; i++) t_ar->frame[i] = (int16_t)(ar_index(t_ar) + 1);
     t_ar->frame_n = SAMPLES;
 }
 static void test_renderer_blocks(void) {
@@ -222,6 +227,55 @@ static void test_renderer_blocks(void) {
         }
     }
     memset(g_ar, 0, sizeof g_ar);
+}
+
+// The surround output (dm_audio_surround): a six-input DeviceSink goes out as 5.1, interleaved FL FR C LFE BL BR as the mix buffers hold it, only while it is on; off, the same sink is
+// downmixed as before, and a two-input sink stays stereo either way. The renderer keeps the channel count of its first frame with a sink, and its render thread reopens its output
+// with six channels before it queues the first 5.1 frame. A 32 kHz renderer's 5.1 goes through the 3:2 upsampler per channel
+static size_t build_sink(int inputs, uint32_t rate) {
+    size_t n = build(16, NCMD);
+    uint8_t *sink = list + 0x20 + (NCMD - 1) * 0x40;
+    *(uint32_t *)(sink + 0x130) = (uint32_t)inputs;
+    for (int j = 0; j < inputs; j++) *(int16_t *)(sink + 0x134 + 2 * j) = (int16_t)j;
+    *(uint32_t *)(list + 0x18) = rate;
+    if (rate == 32000) *(uint32_t *)(list + 0x14) = 160;
+    return n;
+}
+static void test_surround(void) {
+    static int16_t out[FRAME_MAX * OCH];
+    for (int j = 0; j < 6; j++) for (int s = 0; s < SAMPLES; s++) mix[j * SAMPLES + s] = 1000 * (j + 1) * (j & 1 ? -1 : 1);
+    g_sink_id = 0x13;
+    for (int mode = 0; mode < 3; mode++) {   // 0: on, six inputs; 1: off, six inputs; 2: on, two inputs
+        memset(&g_ar[0], 0, sizeof g_ar[0]); surround = mode != 1;
+        size_t n = build_sink(mode == 2 ? 2 : 6, 48000);
+        assert(capture(&g_ar[0], list, n, out) == SAMPLES);
+        int nc = atomic_load(&g_ar[0].out_ch);
+        assert(nc == (mode == 0 ? 6 : 2));
+        for (int s = 0; s < SAMPLES; s++) {
+            if (mode == 0) for (int j = 0; j < 6; j++) assert(out[6 * s + j] == mix[j * SAMPLES + s]);
+            else if (mode == 1) {   // (1000 + 0.707 (3000 + 5000) + 0.251 · -4000) for the left, (-2000 + 0.707 (3000 - 6000) - 0.251 · 4000) for the right
+                int64_t c = 3000LL * 23167 - 4000LL * 8224;
+                assert(out[2 * s] == (int16_t)((1000LL * 32768 + c + 5000LL * 23167) >> 15));
+                assert(out[2 * s + 1] == (int16_t)((-2000LL * 32768 + c - 6000LL * 23167) >> 15));
+            } else assert(out[2 * s] == 1000 && out[2 * s + 1] == -2000);
+        }
+        surround = 1;   // decided once: a later frame keeps the renderer's count
+        assert(capture(&g_ar[0], list, build_sink(6, 48000), out) == SAMPLES && atomic_load(&g_ar[0].out_ch) == nc);
+    }
+    // 32 kHz: 160 samples → 240 per channel, each channel's own constant once the filter's history is full
+    memset(&g_ar[0], 0, sizeof g_ar[0]); surround = 1;
+    for (int j = 0; j < 6; j++) for (int s = 0; s < 160; s++) mix[j * 160 + s] = 1000 * (j + 1);
+    for (int f = 0; f < 3; f++) assert(capture(&g_ar[0], list, build_sink(6, 32000), out) == 240);
+    for (int s = 0; s < 240; s++) for (int j = 0; j < 6; j++) assert(abs(out[6 * s + j] - 1000 * (j + 1)) <= 2);
+    // The render thread: blocks of six channels, from an output opened with six
+    memset(g_ar, 0, sizeof g_ar); memset(blocks_n, 0, sizeof blocks_n);
+    blocks_on = 1; blocks_ch = 6; atomic_store(&g_ar[0].open, 1); render_main(&g_ar[0]); blocks_on = 0; blocks_ch = 2;
+    assert(opened_ch == 6 && blocks_n[0] == NBUF);
+    for (int i = 0; i < NBUF; i++) {
+        assert(blocks[0][i]->size == SAMPLES * 12);
+        for (int j = 0; j < SAMPLES * 6; j++) assert(((const int16_t *)blocks[0][i]->ptr)[j] == 1);
+    }
+    memset(g_ar, 0, sizeof g_ar); memset(blocks_n, 0, sizeof blocks_n);
 }
 
 // The update lock is read off Update, else off UpdateImpl; a miss keeps the caller's offset and is a red line. Built from prologues of the forms the SDKs have (`bl` into a PLT stub or straight to the function)
@@ -291,6 +345,7 @@ int main(int argc, char **argv) {
         assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
     test_histogram();
-    puts("audren layout: update lock read off Update or UpdateImpl, renderers' own blocks, bounded histograms, malformed-list rejection, unaligned and truncated headers, SDK 4/5/6/16/21 stereo PCM and empty/incomplete startup recovery passed");
+    { pid_t pid = fork(); assert(pid >= 0); if (!pid) { test_surround(); _exit(0); } int status; assert(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && !WEXITSTATUS(status)); }
+    puts("audren layout: 5.1 frames with the surround output (downmix without it), update lock read off Update or UpdateImpl, renderers' own blocks, bounded histograms, malformed-list rejection, unaligned and truncated headers, SDK 4/5/6/16/21 stereo PCM and empty/incomplete startup recovery passed");
     return 0;
 }

@@ -67,3 +67,9 @@ void mtl_present_layer(uint32_t w, uint32_t h);   // a sized vi layer (hle_vi.c)
 void mtl_present_screen(uint32_t w, uint32_t h);   // a screen taller than 16:9 (loader.c, DM_SCREEN_ASPECT): the picture's shape for a texture of that shape
 void mtl_present_wait(uint64_t ticket);   // as in nvn_obj.h: wait until that present has been handed to the GPU
 void mtl_present_wait_texture(uint64_t ticket, uint64_t copy);   // the next acquire of a presented texture, or a queue finish: with a snapshot (copy, from mtl_present) its copy has run on the GPU, else as mtl_present_wait
+// The host tone map's grade (nvn_hdr.inc; a profile with a tonemap_agl key): read by every tone map pass, so a change shows on the next frame. Starts from DM_TONEMAP and DM_GRADE_*
+// (docs/env_switches.tsv); an in-game settings menu sets it. curve: 0 the game's, 1 AgX, 2 ACES; look (AgX): 0 none, 1 punchy, 2 golden; game_sat: the game's own saturation step after
+// the curve; ev: exposure in stops; contrast (about 0.18) and saturation: 1 = unchanged; black: the black point in SDR-white units (0 none); peak: the HDR peak over SDR white (0 = the display's)
+typedef struct { int curve, look, game_sat; float ev, contrast, saturation, black, peak; } dm_grade;
+void mtl_grade_get(dm_grade *g);
+void mtl_grade_set(const dm_grade *g);

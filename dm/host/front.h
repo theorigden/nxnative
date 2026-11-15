@@ -18,8 +18,14 @@ int front_screen_max_fps(void);
 // The pixel size of the display the game is shown on: on the Mac the window's screen in its current mode (the main display before the window is up) (a scaled Retina mode's pixels), an iPhone's or iPad's screen (nativeBounds).
 // Returns 0 and leaves w, h alone when not known (no front end: graphics unit tests). Any thread
 int front_display_pixels(int *w, int *h);
+// The display's own panel in pixels where a scaled mode's backing store is larger (Mac: the mode flagged native, no larger than front_display_pixels; DM_OUTPUT_RES=native, loader.c).
+// Returns 0 when not known; a front end without it leaves loader.c to front_display_pixels
+int front_display_panel_pixels(int *w, int *h);
 // Whether the window's current screen mode supports variable refresh (Mac front_mac.m; none on iOS). Any thread
 int front_screen_variable_refresh(void);
+// HDR (DM_HDR=1, Mac): the EDR headroom of the window's screen (its brightest value over SDR white, which changes with the brightness) while the game layer is set up for EDR
+// (RGBA16Float, extended linear sRGB); 0 when it is not (HDR off, a screen without EDR). nvn_mtl.m's tone map maps to it and the present writes linear values (nvn_hdr.inc). Any thread
+float front_edr_headroom(void);
 // The frame rate the display link paces the game at (60, 30, 120; nvn_mtl.m link_sync): in fullscreen, a screen whose refresh rate is not a multiple of it is switched, while the game runs,
 // to a mode of the same size whose rate is, and back when the window leaves fullscreen or that screen (front_mac.m; none on iOS). Called from the present thread
 void front_screen_match(int fps);
@@ -46,6 +52,12 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
 // prompt over the game while controllers join and the calling thread blocks until it closes. 1: done (A or Return with the minimum in, the maximum in, or nobody left to join);
 // 0: closed (B, Escape); -1 with no window: nothing shown, the caller answers as the player closing it
 int front_ctrl_support(int min, int max);
+// The kind of controller the player uses, for the button icons the game shows (DM_BUTTON_ICONS=auto; button_icons.h, hle_sdk16.c): PAD_KIND_XBOX, PAD_KIND_PLAYSTATION, PAD_KIND_OTHER (a Nintendo pad
+// or any other), PAD_KIND_NONE with no controller, PAD_KIND_LOOKING while the front end may still be told of controllers connected at start (the caller waits a little). Player 1's controller,
+// else the first connected. Any thread (Mac front_mac.m; the iOS front end has none yet: a weak default answers none)
+int front_pad_kind(void);
+// The button-icon fonts' variant the host serves (hle_sdk16.c, button_icons.h; decided at the first call): NULL for the Switch's own icons, else xbox, xbox_label, playstation or playstation_label
+const char *dm_button_icons_variant(void);
 
 // Early start of host loading (main.c): reading the NSO / relocation / forced takeover / prefetch start are moved to a background thread, in parallel with the front end (UIKit launch chain, Metal view);
 // the dm_main / main called afterwards waits for it to finish. For call timing and preconditions see the comments in main.c (set DM_ROMFS and the other environment variables and the cwd first; arguments identical item by item to those of the later main).
