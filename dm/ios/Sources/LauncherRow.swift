@@ -12,6 +12,7 @@ struct SettingRow: View {
 
     private var locked: Bool { m.fixed.contains(s.env) }
     private var note: String {
+        if !locked, let live = m.live, !live(s) { return (s.note.isEmpty ? "" : s.note + " · ") + "Applies at next start" }   // over the running game (GameSettings.swift)
         guard locked else { return s.note }
         return (s.note.isEmpty ? "" : s.note + " · ") + (m.fromLaunch.contains(s.env) ? "Set at launch" : "Set by an env file")
     }
@@ -56,5 +57,7 @@ struct SettingRow: View {
             }
         }
         .disabled(locked)
+        .listRowBackground(m.focus == s.env ? Color.accentColor.opacity(0.22) : nil)   // the row a controller has selected (GameSettings.swift)
+        .id(s.env)
     }
 }

@@ -1,4 +1,5 @@
-// Launcher settings, validation and persistence. Shared by the iOS UI, the Mac app's settings window (dm/mac/Launcher.swift) and the native storage regression test.
+// Launcher settings, validation and persistence. Shared by the iOS UI, the Mac app's settings window (dm/mac/Launcher.swift), the same window over the running game
+// (dm/mac/GameSettings.swift, linked into the Mac host) and the native storage regression test.
 import Foundation
 import Combine
 
@@ -12,6 +13,8 @@ struct Setting: Decodable, Identifiable {
     let options: [[String]]?   // choice: [value, label]
     let min, max, step: Double?   // range
     let on, off: String?   // toggle: the values the variable takes (1 / 0 when not given)
+    let unit: String?      // range: shown as its value with this unit (+0.5 EV) instead of a percentage
+    let zero: String?      // range: the label of 0 (Peak: the screen's own)
     var id: String { env }
     var sectionTitle: String { section ?? "Game" }
     var basic: Bool { level == "basic" }
@@ -30,7 +33,7 @@ struct Setting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, base, options, min, max, step, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, base, options, min, max, step, on, off, unit, zero }
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
@@ -40,10 +43,16 @@ final class LauncherModel: ObservableObject {
     let fromLaunch: Set<String>   // of those, the ones the launch environment set (a front end's launch overrides, Xcode; DM_ENV_LAUNCH_KEYS from launcher.c or main.m)
     let ignoreSaved: Bool   // DM_SAVED_CHOICES=0: start from the defaults, and leave the saved choices as they are
     @Published var values: [String: String] = [:]
+    // Over the running game (GameSettings.swift): whether a setting takes effect at once (nil before the game: the launcher), the row a controller has selected, and whether a
+    // choice made there needs the next start
+    var live: ((Setting) -> Bool)?
+    @Published var focus: String?
+    @Published var pendingRestart = false
 
     private let defaults: UserDefaults
 
-    init(_ settings: [Setting], defaults: UserDefaults = .standard) {
+    // running: the game runs with the settings in this process's environment (the host), so a value there is the one in use
+    init(_ settings: [Setting], defaults: UserDefaults = .standard, running: Bool = false) {
         self.defaults = defaults
         self.settings = settings
         let env = ProcessInfo.processInfo.environment
@@ -53,6 +62,7 @@ final class LauncherModel: ObservableObject {
         if ignoreSaved { fputs("launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n", stderr) }
         for s in settings {
             if fixed.contains(s.env), let v = env[s.env] { values[s.env] = v; continue }
+            if running, let p = getenv(s.env), s.accepts(String(cString: p)) { values[s.env] = String(cString: p); continue }
             let saved = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env) as? String   // a string, as launcher.c reads it: not string(forKey:), which turns a number into one
             values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
         }
@@ -78,6 +88,10 @@ final class LauncherModel: ObservableObject {
     func rows(in section: String, basic: Bool) -> [Setting] { rows(in: section).filter { $0.basic == basic } }
     // A range's label: its percentage, with the size in pixels for the chosen console mode when the list has the base size (the render scale)
     func rangeLabel(_ s: Setting, _ v: Double) -> String {
+        if let u = s.unit {
+            if v == 0, let z = s.zero { return z }
+            return String(format: (s.min ?? 0) < 0 ? "%+.2f %@" : "%.2f %@", v, u)
+        }
         let p = "\(Int((v * 100).rounded())) %"
         guard let b = s.base else { return p }
         let size = (values["DM_OPMODE"] ?? "1") == "0" ? b.handheld : b.docked
@@ -103,6 +117,7 @@ final class LauncherModel: ObservableObject {
             setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v)\(s.isDefault(v) ? "" : " (changed)")\n", stderr)
         }
     }
+    func save(_ s: Setting, _ v: String) { store(s, v) }   // a choice made over the running game (GameSettings.swift)
     private func store(_ s: Setting, _ v: String) {
         if !ignoreSaved { if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) } else { defaults.set(v, forKey: "launcher." + s.env) } }
     }

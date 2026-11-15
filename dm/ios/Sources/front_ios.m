@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
+#include "settings_live.h"
 #include "front.h"
 #include "hle.h"
 #include "dm.h"
@@ -288,7 +289,7 @@ bool dm_setting_live(const char *env, const char *value) {
     if (!strcmp(env, "DM_SHOW_FPS")) { if (value) [g_root showFPS:atoi(value) != 0]; return true; }
     if (!strcmp(env, "DM_TOUCH_HAPTICS")) { if (value) dm_gamepad_touch_feedback(atoi(value) != 0); return true; }
     if (!strcmp(env, "DM_RUMBLE")) { if (value) { dm_haptics_set_enabled(atoi(value) != 0); LOG("front end: game rumble %s (in-game menu)", atoi(value) ? "on" : "off"); } return true; }
-    return false;
+    return settings_live_apply(env, value) != 0;   // the host's (settings_live.c): the tone map and its grade, the frame rate and render scale of a frame step page, rumble strength
 }
 @interface DmTVSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;

@@ -1,7 +1,8 @@
 // Quit with the Home button (Mac front end, front_mac.m; LNPANDY/NX2Apple#336). Holding Home (the logo button on Xbox and PlayStation pads) for HQ_HOLD_S seconds opens a
 // "Quit?" prompt over the game: A quits (the same exit as ⌘Q), B or a new press of Home closes it. Letting go of Home before the time is up does nothing. A and B are
 // GameController's buttonA and buttonB (by label: the bottom button on an Xbox or PlayStation pad, the one printed A on a Nintendo pad), not the Switch buttons the game
-// gets. Pure, so tests/t_home_quit.c checks it without a controller or a window.
+// gets. A short press (let go before the hold indicator shows, HQ_RING_S) is a tap: the front end opens its settings panel with it (hq_take_tap; settings_menu_mac.h).
+// Pure, so tests/t_home_quit.c checks it without a controller or a window.
 //
 // The hold works wherever the press reaches the host: pad_keep_system_buttons claims Home on every pad (preferredSystemGestureState = GCSystemGestureStateDisabled), and
 // macOS 27 respects the claim when the Home button setting for apps lets the app decide (front_mac.m logs the setting). When the system takes Home anyway (it opens the
@@ -28,6 +29,7 @@ typedef struct {
     double since;     // when the hold started (seconds, any clock that only goes forward)
     int home;         // Home was down at the last step (a press is a change from up to down)
     int a_up, b_up;   // A and B have been up since the prompt opened: a button already held when it opens does not count
+    int tap;          // Home was let go before HQ_RING_S since the last hq_take_tap
 } home_quit;
 
 // Whether the hold does anything: on unless DM_HOME_QUIT=0 (env: its value, NULL when unset)
@@ -42,7 +44,7 @@ static inline hq_phase hq_step(home_quit *q, double now, int home, int a, int b)
         if (pressed) { q->phase = HQ_HOLDING; q->since = now; }
         break;
     case HQ_HOLDING:
-        if (!home) q->phase = HQ_IDLE;   // let go too early
+        if (!home) { q->phase = HQ_IDLE; if (now - q->since < HQ_RING_S) q->tap = 1; }   // let go too early; before the indicator showed, a tap
         else if (now - q->since >= HQ_HOLD_S) { q->phase = HQ_PROMPT; q->a_up = !a; q->b_up = !b; }
         break;
     case HQ_PROMPT:
@@ -62,6 +64,9 @@ static inline hq_phase hq_step(home_quit *q, double now, int home, int a, int b)
 
 // The window lost focus (another app, the Games app the system opened for Home): whatever was shown closes. A Home still held needs a new press
 static inline void hq_cancel(home_quit *q) { if (q->phase != HQ_QUIT) { q->phase = HQ_IDLE; q->home = 1; } }
+
+// Whether Home was tapped since the last call (and forget it)
+static inline int hq_take_tap(home_quit *q) { int t = q->tap; q->tap = 0; return t; }
 
 // The game gets no controller input in these phases
 static inline int hq_blocks_input(hq_phase p) { return p == HQ_PROMPT || p == HQ_SETTLE || p == HQ_QUIT; }
