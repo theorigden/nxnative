@@ -441,6 +441,11 @@ static void suspend(unsigned reason, BOOL on) {
     };
     if (on) { if (dispatch_get_specific(&queue)) stop(); else dispatch_sync(queue, stop); }
 }
+// Rumble strength and cutoff while the game runs (settings_live.c, the in-game menus): a negative value keeps that one. Read by the rumble queue at each level it plays
+void dm_haptics_apple_levels(float g, float m) {
+    if (g >= 0 && isfinite(g)) gain = fminf(3, g);
+    if (m >= 0 && isfinite(m)) rumble_min = fminf(0.9f, m);
+}
 void dm_haptics_apple_shutdown(void) {
     if (queue) suspend(DM_HAPTICS_INACTIVE, YES);
 }

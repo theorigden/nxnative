@@ -224,6 +224,8 @@ One row per profile; the notes are each profile's `README.md`.
 
 ## Keys
 
+A row `<key>@ios` gives that key the value the iOS host is built with; the plain row is the Mac's (`game.py` `Game.platform`; `game_profile.h` writes the differing macros under `#if TARGET_OS_IPHONE`). Tears of the Kingdom's `mem_reserve@ios` and `app_pool@ios` keep the 5 GB block proven on 8 GB iPhones and iPads while the Mac's pool holds larger 3D views. The Python tools read the plain row.
+
 | Key | Meaning |
 |---|---|
 | `title_id`, `program_id` | Identity. `program_id` is what `svcGetInfo(ProgramId)` reports. The game's name is not stored: the NSP script reads it from the NSP's control data (NACP) |

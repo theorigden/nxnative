@@ -6,7 +6,7 @@ The screen before the game starts shows the settings the game supports. A settin
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game's upscaler](#games-upscaler), [Game language](#game-language), [Picture](#picture), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join), [Controller buttons](#controller-buttons)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
-- [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode), [Sound](#sound)
+- [The Mac settings window](#the-mac-settings-window): [Over the game](#the-mac-settings-window-over-the-game), [Display mode](#display-mode), [Sound](#sound)
 - [In-game menu](#in-game-menu)
 - [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
@@ -87,7 +87,11 @@ iPhone and iPad. **Fit**, the default, shows the game's picture (16:9, or the ta
 
 ### Tone map
 
-Games whose profile names their tone map (Tears of the Kingdom). How the game's bright scene is brought down to the screen's range. **Game's own**, the default, is the game's curve, the same picture as without the setting. **AgX** keeps colours natural as they get brighter, so skies, fire and lights fade towards white instead of turning one saturated colour. **ACES** is the filmic curve many games use: more contrast and deeper shadows. AgX and ACES keep the game's overall brightness; the game's own slight saturation boost stays on all three. Grading values (exposure, contrast, saturation, black point) can be set in an `env.txt` ([Settings in a file](#settings-in-a-file)) and change the picture at once when an in-game menu sets them.
+Games whose profile names their tone map (Tears of the Kingdom). How the game's bright scene is brought down to the screen's range. **Game's own**, the default, is the game's curve, the same picture as without the setting. **AgX** keeps colours natural as they get brighter, so skies, fire and lights fade towards white instead of turning one saturated colour. **ACES** is the filmic curve many games use: more contrast and deeper shadows. AgX and ACES keep the game's overall brightness; the game's own slight saturation boost stays on all three. The grade below works with each of them.
+
+### Exposure, contrast, saturation, black point
+
+Games with a tone map setting. They adjust the picture around the tone curve: **Exposure** in stops (+1 EV is twice as bright before the curve), **Contrast** and **Saturation** as a percentage of the game's (100 % is unchanged), **Black point** in percent of white (above 0 deepens the shadows, below lifts them). **Game's colour boost** is the game's own slight saturation step after the curve; off, the colours are those of the curve alone. **HDR peak** (Mac, with **HDR** on) caps the brightest value at that many times the normal white; **Screen's own** uses all the screen can show. All of them change the picture at once in the [Mac settings window over the game](#the-mac-settings-window-over-the-game). In an `env.txt`: `DM_GRADE_EV`, `DM_GRADE_CONTRAST`, `DM_GRADE_SATURATION`, `DM_GRADE_BLACK`, `DM_GRADE_GAME_SAT`, `DM_GRADE_PEAK`.
 
 ### AgX look
 
@@ -243,6 +247,14 @@ Click **Play** (or press Return) to start the game. **Quit**, ⌘Q or closing th
 
 Turn off **Show this window at launch** to start the game at once with your choices. Hold Option while the app opens to see the window again. `DM_LAUNCHER=0` in the app's `env.txt` (`~/Library/Application Support/nxnative/<title ID>/env.txt`) or in its environment, or opening it with `open <app> --args --no-launcher`, also skips the window; your choices still apply. `DM_SAVED_CHOICES=0` starts with the tested defaults instead.
 
+### The Mac settings window over the game
+
+The same window opens while you play: press ⌘, (or choose **Settings…** in the app menu), or press a controller's Home button briefly (holding it still asks to quit). It lies over the game, which keeps running behind it, and the game gets no keyboard, mouse or controller input while it is open. Settings the running game can take change at once: **Frame rate**, **Render scale**, **Upscaling**, **Display mode**, **Tone map**, **AgX look**, the grade (**Exposure**, **Contrast**, **Saturation**, **Black point**, **Game's colour boost**, **HDR peak**), **HDR**, **Game rumble**, **Rumble strength**, **Rumble cutoff** and **Performance HUD**; the picture changes on the game's next frame. The others say **Applies at next start**, and once you change one, **Restart Game** quits the game and starts it again with your choices (save first: progress the game has not saved is lost, as with ⌘Q). Every choice is saved as in the window before the game, which shows it at the next start; **Show this window at launch** works the same, so you can turn the window off at launch and change settings only while you play.
+
+With a controller: the D-pad or left stick moves through the settings (the selected one is highlighted), left and right change it, A flips a switch or takes the next choice, and B or Home closes the window. With the keyboard: the arrow keys and Return do the same, Escape closes it. **Resume** closes it too, and **Quit Game** quits.
+
+The game keeps drawing while the window is open, so a picture change shows on the game itself. A game that stops drawing (its own pause screen may) shows the change when it draws again; the window does not redraw the last picture itself. A controller's Home button reaches the game window only when macOS lets apps have it ([On the Mac](playing.md#on-the-mac)); ⌘, always works.
+
 ### Display mode
 
 **Window** or **Fullscreen**: how the game's window opens. ⌃⌘F or the green button changes it while you play. In an `env.txt`: `DM_FULLSCREEN=1` or `0`.
@@ -279,7 +291,9 @@ iCloud Drive takes a moment to carry a file from one device to the other. Quit t
 
 ## In-game menu
 
-On the iPhone and iPad the gear at the top centre of the touch controls opens a menu while the game runs; it stays when a controller hides the other controls. It holds **Console mode**, **Picture** and the **Frame-rate counter**, then **Controller layout** (**2D**, **3D**, and **Tap**, no controls and every touch to the game, in handheld mode), **Touch feedback** and **Game rumble**: the settings that take effect at once. A choice opens to show its options, the current one ticked. The menu's text keeps one size whatever the system text size, so it stays short over the game. A change is remembered as on the settings screen, which shows it at the next start; a setting `Documents/env.txt` fixes is shown, not changed. The other settings need the game to start again, so they are only on the settings screen: close the app fully and open it again.
+On the Mac, the settings window opens over the game ([The Mac settings window over the game](#the-mac-settings-window-over-the-game)).
+
+On the iPhone and iPad the gear at the top centre of the touch controls opens a menu while the game runs; it stays when a controller hides the other controls. It holds **Console mode**, **Picture** and the **Frame-rate counter**, then **Controller layout** (**2D**, **3D**, and **Tap**, no controls and every touch to the game, in handheld mode), **Touch feedback** and **Game rumble**, with **Frame rate**, **Tone map**, **AgX look** and **Game's colour boost** in games that take them while running: the settings that take effect at once. A choice opens to show its options, the current one ticked. The menu's text keeps one size whatever the system text size, so it stays short over the game. A change is remembered as on the settings screen, which shows it at the next start; a setting `Documents/env.txt` fixes is shown, not changed. The other settings need the game to start again, so they are only on the settings screen: close the app fully and open it again.
 
 Console mode changes as on a Switch put in or taken out of its dock. While a TV shows the game it stays **Docked**, and the mode you pick applies when the TV is disconnected. **Docked** removes the Tap layout, as a docked Switch reads no touch screen.
 

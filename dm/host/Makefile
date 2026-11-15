@@ -23,7 +23,7 @@ ifeq ($(filter -j%,$(MAKEFLAGS)),)
 MAKEFLAGS += -j$(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 endif
 # Service-layer takeover hle_*.c files are included by wildcard: adding a file does not touch this line (avoids merge conflicts)
-SRC=main.c loader.c hle.c crash.c probe.c thread.c save_sync.c memstat.m haptics_apple.m pad_switch2_apple.m $(sort $(wildcard hle_*.c)) front_mac.m web_apple.m entry.S
+SRC=main.c loader.c hle.c crash.c probe.c thread.c save_sync.c settings_live.c memstat.m haptics_apple.m pad_switch2_apple.m $(sort $(wildcard hle_*.c)) front_mac.m web_apple.m entry.S
 # NVN null device + nn::vi + the Vulkan layer (dm/gfx/)
 # Sources under dm/gfx, dm/gfx/nvn, dm/gfx/tex, dm/gfx/vk and dm/gfx/gl are included by wildcard (tests/ and metal/ do not go into the host): adding a file does not touch this line
 GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m ../gfx/vk/*.m ../gfx/gl/*.m))
@@ -89,8 +89,17 @@ $(OBJ_DIR)/host/%.o: % Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 $(OBJ_DIR)/gfx/%.o: ../gfx/% Makefile ../mac/min_os.mk | $(GAME_H) $(MSL_H)
 	@mkdir -p $(dir $@)
 	clang $(HOST_CFLAGS) -MMD -MP -c $< -o $@
-$(HOST_BIN): $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) Makefile ../mac/min_os.mk
-	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(VPX_LIB) $(DAV1D_LIB) $(HOST_FRAMEWORKS)
+# The settings window over the game (front_mac.m opens it): the Mac launcher's SwiftUI view and the iOS launcher's model and rows, with dm/mac/GameSettings.swift, compiled by swiftc
+# into one object (whole module) and linked with the Swift runtime of macOS (/usr/lib/swift). The iOS build takes only clang's compiles (dm/ios/tools/gen_build.py), so it leaves it out
+SWIFT_SRC = ../mac/GameSettings.swift ../mac/Launcher.swift ../ios/Sources/LauncherSettings.swift ../ios/Sources/LauncherRow.swift ../ios/Sources/SaveSyncReport.swift
+SWIFT_OBJ = $(OBJ_DIR)/swift/settings_ui.o
+MAC_SDK = $(shell xcrun --sdk macosx --show-sdk-path)
+SWIFT_LIBS = -L$(MAC_SDK)/usr/lib/swift -L$(dir $(shell xcrun --find swiftc))../lib/swift/macosx -framework SwiftUI -framework Combine
+$(SWIFT_OBJ): $(SWIFT_SRC) Makefile ../mac/min_os.mk
+	@mkdir -p $(dir $@)
+	xcrun swiftc -sdk $(MAC_SDK) -target arm64-apple-macos$(MACOS_MIN) -O -swift-version 5 -parse-as-library -wmo -module-name DmSettingsUI -module-cache-path $(dir $@)module-cache -c -o $@ $(SWIFT_SRC)
+$(HOST_BIN): $(HOST_OBJ) $(SWIFT_OBJ) $(VPX_LIB) $(DAV1D_LIB) Makefile ../mac/min_os.mk
+	clang $(HOST_CFLAGS) -o $@ $(HOST_OBJ) $(SWIFT_OBJ) $(VPX_LIB) $(DAV1D_LIB) $(HOST_FRAMEWORKS) $(SWIFT_LIBS)
 	dsymutil $@
 ifneq ($(strip $(GAME)),)
 -include $(HOST_OBJ:.o=.d)

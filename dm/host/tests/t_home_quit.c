@@ -25,6 +25,15 @@ int main(void) {
 
     q = (home_quit){0};
     hq_step(&q, 0, 1, 0, 0);
+    CHECK(hq_step(&q, HQ_RING_S / 2, 0, 0, 0) == HQ_IDLE && hq_take_tap(&q), "a short press is a tap");
+    CHECK(!hq_take_tap(&q), "a tap is taken once");
+    hq_step(&q, 1.0, 1, 0, 0);
+    CHECK(hq_step(&q, 1.0 + HQ_RING_S + 0.1, 0, 0, 0) == HQ_IDLE && !hq_take_tap(&q), "let go after the indicator showed: no tap");
+    hq_step(&q, 2.0, 1, 0, 0); hq_step(&q, 4.0, 1, 0, 0); hq_step(&q, 4.1, 0, 0, 0);
+    CHECK(q.phase == HQ_PROMPT && !hq_take_tap(&q), "the hold to the prompt is no tap");
+
+    q = (home_quit){0};
+    hq_step(&q, 0, 1, 0, 0);
     CHECK(hq_step(&q, 1.0, 0, 0, 0) == HQ_IDLE, "let go before 2 s: nothing happens");
     CHECK(hq_step(&q, 5.0, 0, 0, 0) == HQ_IDLE, "and nothing later either");
 

@@ -36,11 +36,16 @@ icon_font	Font/Font.Nin_NX_NVN.bfarc.zs:scft/External.bfotf	E040=A E041=B E042=X
 # nninitStartup's heap is the pool less the used memory less 1.07 GB (0x43400000, main+0xca5bd8), so the heap and the game's root heap follow app_pool. The pool is the Switch's
 # 3285 MB + 256 MB: the Graphics heap grows with 3D views past 1600x1080 (patches.py, main+0x92d94c, 68 bytes a pixel), and the root heap had about 150 MB to spare; with
 # 406 MB an output of 3840x2560 (+347 MB) fits. 5.25 GB in all (one reservation of at most 6 GB without the extended virtual addressing entitlement; 5 GB is proven on a phone):
-# 256 MB in front + 2.375 GB alias region + 256 MB stack region + 2.375 GB heap region
+# 256 MB in front + 2.375 GB alias region + 256 MB stack region + 2.375 GB heap region.
+# iPhone and iPad (8 GB): the 5 GB block proven there and the Switch's pool (mem_reserve@ios, app_pool@ios; game.py Game.platform). Their outputs stay near 1600x1080 3D views
+# (an iPhone's 2.17:1 at 1080 high: 2340x1080, 3D 1950x900, +1.8 MB; an 11" iPad Pro's 1.43:1: 1920x1344, 3D 1600x1120, +4.4 MB; a 12.9" one's 4:3: 1920x1440, 3D 1600x1200, +13 MB; DM_OUTPUT_RES=native on an iPhone 15 Pro Max:
+# 2796x1290, 3D 2330x1075, +53 MB), which the root heap's 150 MB to spare holds; 256 MB in front + 2.375 GB alias + 256 MB stack + 2.125 GB heap region
 mem_reserve	0x150000000
+mem_reserve@ios	0x140000000
 mem_alias	0x98000000
 mem_stack	0x10000000
 app_pool	0xDD500000
+app_pool@ios	0xCD500000
 
 # ---- Graphics ----
 # Streamed textures are written by the CPU straight into pool memory (already in GPU layout) and published with nvnMemoryPoolFlushMappedRange (hle_nvn.c ft_add)

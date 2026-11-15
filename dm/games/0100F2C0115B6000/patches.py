@@ -144,8 +144,13 @@ def stub(ctx, step, read1, read2, fade, swap, view):
 # The field of view and the HUD's projection: sead::PerspectiveProjection is laid out as in Breath of the Wild 1.9.0 and its setFovy_, constructor, set() and doUpdateMatrix
 # match it instruction for instruction at the sites, so its stub bodies are used as they are (01007EF00011E000/patches.py, which describes them; state +0x58.. and the
 # ring of fovys at +0xfc..). The HUD at the taller edges: duo_anchor.c after each pane's global matrix, from nn::ui2d::Pane::Calculate (main+0x593110) and
-# Pane::CalculateGlobalMatrix (main+0x10d8130)
-_duo_anchor = 'bd4000201e20200854000041d65f03c0f9400c08b4ffffc852800609aa0803eaf9400d4bb400008baa0b03ea7100052954ffff81bd40554152a88f491e2701221e2220201e2e10011e2f10021e21ac41bd4070022d4a14031e2208641e2288621e2020881e244c44bd4084031e2308a21e2388a51e2020481e224ca5f94014099100800abd4010221e2208221e222080540003cbbd4014261e2608261e2620a05400034bbd4018261e2608261e2620a0540002c8bd407c061e20c0c652a8440b1e2701671e2708271e2720c0540001e5bd408c061e20c0d01e27220054000165eb0a013f54fff941f9400008f9407108eb02011f54fff8c0bd400420bd4080011e2108001400001ceb0a013f540004c1bd4014261e2608261e2620a05400044b52a886891e2701261e260826bd4004271e3010101f0740c61e2620a054000345bd408c061e20c0d052a844091e2701311e3108311e31220054000265f9400009f9407129eb02013f540001e0bd4080001e2008e0bd008000bd4004201e200860bd008400bd400420bd4088011e210800bd008800bd4004201e2008c0bd008c00d65f03c01e222080540000abbd4014231e2308231e2320a054fff2aaf9400009f940712952a8500a1e2701431e230823eb02013f540000811e2320801e2354a854fff1645280060914000004aa0a03e87100052954000440f9400d0ab400034abd4071042d4a19051e2408a71e2488a41e2020e81e274c84bd4085051e2508c71e2588c51e2020e81e274ca51e222080540000abbd4014261e2608261e2620a054fffd6af9400108f9407108eb02011f54ffede11e2320801e2354a854fffc8417ffff6b2d460d021e2308631f020c421e2a10031e23204054ffecacbd408c021e20c043bd4008241e2408241e24206054ffebebbc5e40231e2028041e2420606f00e4041e2444641e24cc631e2338031e2140001e2020481e20cc601e2008201e202840bd008c00d65f03c0'
+# Pane::CalculateGlobalMatrix (main+0x10d8130). A screen wider than 16:9 (an iPhone's 2.17:1; the loader keeps the output 1080 high and widens it, 2340x1080) goes
+# through the same stubs: the display size, crop and final image take the output's width, the layout size its width (1560.0 x 720.0), the 3D views follow the frame
+# buffer (1950x900), the scene's 16:9 camera takes the screen's ratio with its vertical angle unchanged (state +0x5c k = 1: more at the sides), the HUD's projection is
+# 2340 x 1080 in 1920x1080 units centred on the 16:9 middle (+0xa0 / +0xa4), and duo_anchor.c only stretches full-screen panes sideways (state +0x9c). The words of
+# duo_anchor.c: `clang -target arm64-apple-macos -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-jump-tables -fno-asynchronous-unwind-tables -c duo_anchor.c`,
+# its __text as 32-bit words (no relocations), duo_calc at +0
+_duo_anchor = 'bd4000201e202008540000a1bd401c211e2e10021e22202054000b8df9400c08b4000b4852800609aa0803eaf9400d4bb400008baa0b03ea7100052954ffff81bd40554152a88f491e2701221e2220201e2e10011e2f10021e21ac41bd4070062d4a14021e2608431e2688421e2020681e234c44bd4084031e2308a21e2388a51e2020481e224ca5f94014099100800abd4010221e2208221e2220805400072bbd4014271e2708271e2720a0540006abbd4018271e2708271e2720a054000628bd407c071e20c0f052a8440b1e2701711e3108311e31220054000545bd408c101e20c2121e312240540004c5eb0a013f540004c1f9400008f9407108eb02011f54000440bd400420bd4080011e210800bd008000bd4004201e200860bd008400bd400420bd4088011e210800bd008800bd4004201e200a00bd008c00bd401c201e2e10011e2120005400020d1e2008c0bd007000bd401c202d4e88011e210800bd007400bd401c201e220800bd007800bd401c201e2008e0bd007c00d65f03c01e20200854000041d65f03c0eb0a013f540004c1bd4014261e2608261e2620a05400044b52a886891e2701261e260826bd4004271e3010101f0740c61e2620a054000345bd408c061e20c0d052a844091e2701311e3108311e31220054000265f9400009f9407129eb02013f540001e0bd4080001e2008e0bd008000bd4004201e200860bd008400bd400420bd4088011e210800bd008800bd4004201e2008c0bd008c00d65f03c01e222080540000abbd4014231e2308231e2320a054fffa6af9400009f940712952a8500a1e2701431e230823eb02013f540000811e2320801e2354a854fff9245280060914000004aa0a03e87100052954000440f9400d0ab400034abd4071042d4a19051e2408a71e2488a41e2020e81e274c84bd4085051e2508c71e2588c51e2020e81e274ca51e222080540000abbd4014261e2608261e2620a054fffd6af9400108f9407108eb02011f54fff5a11e2320801e2354a854fffc8417ffffa92d460d021e2308631f020c421e2a10031e23204054fff46cbd408c021e20c043bd4008241e2408241e24206054fff3abbc5e40231e2028041e2420606f00e4041e2444641e24cc631e2338031e2140001e2020481e20cc601e2008201e202840bd008c00d65f03c0'
 _duo_calc = 0x0
 _pane_draw_self = 0x10d7f98   # nn::ui2d::Pane::DrawSelf (vtable main+0x357f280 slot 28, empty)
 TANF, ATANF = 0x2bb7470, 0x2bb7480   # PLT
@@ -189,9 +194,9 @@ def screen_shape(ctx):
         emit(ADRP(9, here(), STATE) if w is None else w)
     emit(B(here(), 0x92d950))   # out
     fs_put(0x92d94c, [B(0x92d94c, start)], 'HeapDef sizes: Graphics and DynamicTextureAllocatorMem grow with 3D views past 1600x1080 (an output size from the host)')
-    # layout size: x8 = 1280.0 | 720.0 << 32 → the host's layout height (+0x50, float)
-    stub(0xbdb6a0, '8886e8f2', (0xf2e88688, None, 0xb9405210, 0x34000050, 0xb3607e08),
-         'layout size 1280x720 → the host\'s layout height')
+    # layout size: x8 = 1280.0 | 720.0 << 32 → the host's layout height (+0x50, float) and width (+0x70, float; a screen wider than 16:9) where set
+    stub(0xbdb6a0, '8886e8f2', (0xf2e88688, None, 0xb9405210, 0x34000050, 0xb3607e08, None, 0xb9407210, 0x34000050, 0xb3407e08),
+         'layout size 1280x720 → the host\'s layout size')
     # crop request: a 1920x1080 crop becomes the output's size
     stub(0x3de5b8, '03901629', (None, 0xb9404a11, 0x34000131, 0x7110e09f, 0x540000e1, 0x711e007f, 0x540000a1, 0x2a1103e4, 0xb9406a11, 0x34000051, 0x2a1103e3,
                                 0x29169003),
@@ -203,32 +208,39 @@ def screen_shape(ctx):
                                0x34000051, 0x1e270221),
          'final image (agl::RenderDisplay) 1920x1080 → the host\'s output size')
     # HUD projection: main+0x1c0a40 (x0 the owner of an nn::ui2d::DrawInfo, s0 / s1 the screen's width and height) builds the layouts' orthographic projection
-    # (far 300) and stores it in the DrawInfo (main+0x1c0ddc), from which each pane's uniform block takes it (main+0x10cc93c). The HUD drawn into the final image gets
-    # (1920.0, 1080.0) there (main+0x872a34): a 1920x1080 screen becomes 1920 wide in the output's shape (1920 x output height / output width), so the HUD keeps its shape
-    # and its size relative to the screen in a taller or larger final image (the layouts are in 1920-wide units: a projection of the output's pixels drew a 3456-wide
-    # output's HUD at its 1920 size in the middle). x16 / x17 and s16 are free at entry
-    stub(0x1c0a50, '12102c1e', (0x1e2c1012, 0x1e260011, 0x52a89e10, 0x6b10023f, 0x540001c1, 0x1e260031, 0x52a890f0, 0x6b10023f, 0x54000141, None, 0xb9404a11,
-                               0x340000f1, 0x1e230221, 0xb9406a11, 0x34000091,
-                               0x1e230230,    # ucvtf s16,w17   output width
-                               0x1e301821,    # fdiv s1,s1,s16
-                               0x1e200821),   # fmul s1,s1,s0   1920 x height / width
-         'HUD projection 1920x1080 → 1920 wide in the output\'s shape')
+    # (far 300, centred on the layout's middle) and stores it in the DrawInfo (main+0x1c0ddc), from which each pane's uniform block takes it (main+0x10cc93c). The HUD
+    # drawn into the final image gets (1920.0, 1080.0) there (main+0x872a34): a 1920x1080 screen becomes the host's HUD projection (state +0xa0 / +0xa4 floats, loader.c):
+    # 1920 wide in the output's shape on a taller output (1920 x output height / output width), 1080 high in it on a wider one (1080 x width / height), 1920x1080 at 16:9 of
+    # any size. So the HUD keeps its shape and its size relative to the screen's height or width, whichever 16:9 fits, and a wider screen shows it in the 16:9 middle (the
+    # layouts are in 1920-wide units: a projection of the output's pixels drew a 3456-wide output's HUD at its 1920 size in the middle). x16 / x17 are free at entry
+    stub(0x1c0a50, '12102c1e', (0x1e2c1012, 0x1e260011, 0x52a89e10, 0x6b10023f, 0x54000141, 0x1e260031, 0x52a890f0, 0x6b10023f, 0x540000c1, None,
+                               0xb940a611,    # ldr w17,[x16,#0xa4]   the HUD projection's height (0 = no screen shape)
+                               0x34000071,    # cbz w17, back
+                               0x1e270221,    # fmov s1,w17
+                               0xbd40a200),   # ldr s0,[x16,#0xa0]    its width
+         'HUD projection 1920x1080 → the host\'s, in the output\'s shape')
     # The layout objects' own 1280x720: each takes the layout height while its bit of state +0x54 is set (loader.c DM_SCREEN_ASPECT_SITES, all by default), so one build
     # can try them one by one (Breath of the Wild's taller_bit). The int pair in x24 and the float pair in x25 at main+0x2880b3c / main+0x2880b40 (the UI system's setup:
     # 1280x720 and 1280.0, 720.0), and the 1280x720 defaults of four objects (main+0x2880e34 +0x288, main+0xd47068 +0x310, main+0x6ee938 +0x1fc, main+0x8c3fe8: eight slots).
     # x16 is unused around each site
-    def taller_bit(site, orig, bit, load, apply, why):
+    # A screen wider than 16:9 gives them the layout width as well (+0x6c int, +0x70 float; 0 = 1280)
+    def taller_bit(site, orig, bit, load, load_w, apply, apply_w, why):
         fs_site(site, orig)
         start = here(); emit(struct.unpack('<I', bytes.fromhex(orig))[0])
         emit(ADRP(16, here(), STATE))
-        emit(0xb9405610); emit(0x36000000 | bit << 19 | 5 << 5 | 16)   # ldr w16,[x16,#0x54]; tbz w16,#bit,back (+5)
+        emit(0xb9405610); emit(0x36000000 | bit << 19 | 9 << 5 | 16)   # ldr w16,[x16,#0x54]; tbz w16,#bit,back (+9)
         emit(ADRP(16, here(), STATE))
         for w in (load, 0x34000050, apply):
             emit(w)
+        emit(ADRP(16, here(), STATE))
+        for w in (load_w, 0x34000050, apply_w):
+            emit(w)
         emit(B(here(), site + 4))
         fs_put(site, [B(site, start)], why)
-    LAY, LAYF = 0xb9404e10, 0xb9405210   # ldr w16,[x16,#0x4c] / #0x50
+    LAY, LAYF = 0xb9404e10, 0xb9405210     # ldr w16,[x16,#0x4c] / #0x50
+    LAYW, LAYWF = 0xb9406e10, 0xb9407210   # ldr w16,[x16,#0x6c] / #0x70
     hi = lambda r: 0xb3607e00 | r          # bfi x<r>,x16,#32,#32 (the pair's height)
+    lo = lambda r: 0xb3407e00 | r          # bfi x<r>,x16,#0,#32 (the pair's width)
     for bit, (site, orig, load, r, why) in enumerate((
             (0x2880b3c, '185ac0f2', LAY, 24, '1280x720 (int) in the UI system\'s setup'),
             (0x2880b40, '9986e8f2', LAYF, 25, '1280.0, 720.0 in the UI system\'s setup'),
@@ -236,7 +248,7 @@ def screen_shape(ctx):
             (0xd47068, '085ac0f2', LAY, 8, '1280x720 default of an object (+0x310)'),
             (0x6ee938, '0a5ac0f2', LAY, 10, '1280x720 default of an object (+0x1fc)'),
             (0x8c3fe8, '0a5ac0f2', LAY, 10, '1280x720 defaults of an object (eight slots)'))):
-        taller_bit(site, orig, bit, load, hi(r), why)
+        taller_bit(site, orig, bit, load, LAYWF if load == LAYF else LAYW, hi(r), lo(r), why)
     FOV_BODY = (None, 0xbd405a01, 0x1e202028, 0x540003e0, 'ratio', 0x1e213842, 0x1e20c042, 0xbd406203, 0x1e232040, 0x5400032a,
                 0xb940a269, 0x9104020a, 0x5280080b, 0xb840454c, 0x6b09019f, 0x54000260, 0x7100056b, 0x54ffff81,
                 'half_to_s0', 'tanf', None, 0xbd405e01, 0x1e210800, 'atanf', 's0_to_half', 0x1e202800, 0xbd00a260,

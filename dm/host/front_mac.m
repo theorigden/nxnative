@@ -3,6 +3,8 @@
 // The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN=1 starts it that way. On a screen with a camera housing fullscreen covers the whole screen,
 // the row beside the housing included (fs_whole_enter). ⌘Q quits, and so does a controller's Home button held for 2 s and
 // confirmed with A (home_quit.h); the left mouse button is the touchscreen.
+// Settings (dm/mac/GameSettings.swift): ⌘, (the app menu's Settings…) or a short press of a controller's Home button opens the app's settings window over the game; settings the
+// running game takes change at once, the others at the next start. While it is open the game gets no input.
 // Cheats (hle_cheats.c): the Cheats menu's rows toggle, reload (⌘R) and open the cheats folder; its first item "Show Cheats
 // Window" (⌘⇧C, or DM_CHEATS_WINDOW=1 at launch) opens a Cheats panel beside the game: sections, search, the master switch,
 // safe mode, values, details and the import of cheat files (see the code below).
@@ -35,6 +37,7 @@ static void merge_rumble_to(void (*sink)(const dm_haptic_state *));
 #include "save_sync.h"
 #include "ctrl_prompt.h"
 #include "button_icons.h"
+#include "settings_live.h"
 #include <stdatomic.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -106,6 +109,12 @@ static void hdr_apply(NSScreen *screen) {
     float h = edr ? (float)fmax(1.0, cur) : 0.0f, old = atomic_exchange(&g_edr_headroom, h);
     if (fabsf(old - h) > 0.25f) LOG("front end: HDR: EDR headroom %.2f (potential %.2f)", h, pot);
 }
+static void hdr_tick(void);   // hdr_apply on the window's screen (after g_win below)
+static void hdr_timer(void) {   // while HDR is wanted the headroom is read again every half second (main thread; the settings window turns HDR on and off)
+    static NSTimer *t;
+    if (g_hdr_want == 1 && !t) t = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *x) { (void)x; hdr_tick(); }];
+    else if (g_hdr_want != 1 && t) { [t invalidate]; t = nil; }
+}
 static void screen_refresh(NSScreen *screen) {   // main thread: refresh capabilities of the current screen and mode, including a mode change without moving the window
     if (!screen) return;
     hdr_apply(screen);
@@ -129,6 +138,7 @@ int front_fullscreen(void) { return g_fullscreen; }   // nvn_mtl.m link_latency:
 // the 120 Hz link paces it (nvn_mtl.m link_vrr_120)
 static NSWindow *g_win; static _Atomic int g_match_want;   // the game's window; the frame rate to match (0 = not known yet), written by the present thread only
 static int g_fs_whole;   // main thread: the window covers the whole screen of a Mac with a camera housing (fs_whole_enter, below)
+static void hdr_tick(void) { hdr_apply(g_win.screen); }
 static int win_fullscreen(NSWindow *w) { return g_fs_whole || (w.styleMask & NSWindowStyleMaskFullScreen) != 0; }   // either fullscreen
 static CGDirectDisplayID g_match_id; static CGDisplayModeRef g_match_orig; static int g_match_orig_vrr;   // main thread: the screen this host switched, its own mode (NULL = none switched) and whether that mode is variable-refresh
 static double mode_hz(CGDisplayModeRef m) { double hz = CGDisplayModeGetRefreshRate(m); return hz > 0 ? hz : 0; }   // 0 = not known (older built-in screens report none)
@@ -293,6 +303,7 @@ static void pad_set(int p, uint64_t m, int32_t lx, int32_t ly, int32_t rx, int32
     dm_pad_set_player(p, m, lx, ly, rx, ry);
 }
 static void hq_poll(void);
+static void settings_toggle(void);
 static home_quit g_hq;   // the Home button's hold and quit prompt (home_quit.h): while the prompt is open the controllers' input goes to it, not to the game
 static int g_press_to_join;   // DM_PAD_PRESS_TO_JOIN=1, below pad_read
 static int pad_join(const void *owner, const char *name);
@@ -692,6 +703,7 @@ static void hq_poll(void) {
     double now = CACurrentMediaTime();
     hq_phase was = g_hq.phase, ph = hq_step(&g_hq, now, home, a, b);
     if (ph != was) hq_changed(was, ph, holder);
+    if (hq_take_tap(&g_hq)) settings_toggle();   // a short press: the settings window (below)
     double fill = hq_ring(&g_hq, now);
     if (fill >= 0) {
         if (!g_hq_hold) { NSView *cv = g_win.contentView; CAShapeLayer *ring = nil; g_hq_hold = hq_hold_view(cv.bounds, @(g_hq_text[HQ_TEXT_HOLD]), &ring); g_hq_ring = ring; [cv addSubview:g_hq_hold]; hq_fade(g_hq_hold, 1); }
@@ -704,6 +716,139 @@ static void hq_close(void) {
     if (g_hq.phase == HQ_PROMPT) LOG("front end: quit prompt closed, the window lost the focus");
     hq_cancel(&g_hq); hq_hide_hold(); hq_hide_prompt();
 }
+// ---------- The settings window over the game (dm/mac/GameSettings.swift: the launcher's view, linked into the host) ----------
+// Opened by ⌘, (the app menu's Settings…), a short press of a controller's Home button (home_quit.h hq_take_tap) or DM_CTL "menu open". It is a view inside the game's window,
+// so the window stays key and the game keeps its focus and keeps running: the picture settings show on its next frame. While it is open the game gets no keyboard, mouse or
+// controller input (input_release, as when the window loses the focus); the arrow keys and the controllers move through its rows (the D-pad or left stick, A changes a row, B,
+// Home or Escape closes it), the mouse works its controls. Closed, the game has its input again once the controllers' buttons are all up, so the B that closed it never
+// reaches the game. A controller's Home press only reaches the host when macOS lets apps have it (hq_log_setting)
+int dm_settings_panel_open(void *parent);   // GameSettings.swift: 0 when this host has no settings list
+void dm_settings_panel_close(void);
+int dm_settings_panel_is_open(void);
+void dm_settings_panel_nav(int code);   // 0 up, 1 down, 2 left, 3 right, 4 A, 5 B
+int dm_settings_panel_set(const char *env, const char *value);
+int dm_settings_panel_snapshot(const char *path);
+static int g_set_open, g_set_settle;   // the window is open; it was closed and the controllers still hold a button
+static NSTimer *g_set_timer;
+static uint64_t g_set_held; static double g_set_rep;   // the menu buttons down at the last poll, and when the held direction repeats next
+void front_settings_log(const char *s) { LOG("front end: settings: %s", s); }
+enum { SB_UP = 1, SB_DOWN = 2, SB_LEFT = 4, SB_RIGHT = 8, SB_A = 16, SB_B = 32, SB_HOME = 64 };
+static uint64_t set_buttons(void) {   // every controller's buttons that work the window: by label, as the Home prompt's A and B
+    uint64_t m = 0;
+    for (GCController *c in GCController.controllers) {
+        GCExtendedGamepad *g = c.extendedGamepad; if (!g) continue;
+        if (g.dpad.up.isPressed || g.leftThumbstick.yAxis.value > 0.6f) m |= SB_UP;
+        if (g.dpad.down.isPressed || g.leftThumbstick.yAxis.value < -0.6f) m |= SB_DOWN;
+        if (g.dpad.left.isPressed || g.leftThumbstick.xAxis.value < -0.6f) m |= SB_LEFT;
+        if (g.dpad.right.isPressed || g.leftThumbstick.xAxis.value > 0.6f) m |= SB_RIGHT;
+        if (g.buttonA.isPressed) m |= SB_A;
+        if (g.buttonB.isPressed) m |= SB_B;
+        if (g.buttonHome.isPressed) m |= SB_HOME;
+    }
+    uint64_t sw = 0;   // the pads read from HID and Bluetooth, in Switch buttons
+    for (hid_pad *d = g_hidpads; d; d = d->next) sw |= d->twin && hidpad_is_pro(d) ? d->pro_m : pad_hid_buttons(&d->st);
+    for (s2_pad *d = dm_switch2_pads(); d; d = d->next) { uint64_t b; int32_t s[4]; if (s2_pad_input(&d->st, &b, s)) sw |= b; }
+    for (jc1_pad *d = g_jc1_pads; d; d = d->next) { uint64_t b; int32_t s[4]; if (jc1_pad_state(d, &b, s)) sw |= b; }
+    if (sw & DM_BTN_UP) m |= SB_UP;
+    if (sw & DM_BTN_DOWN) m |= SB_DOWN;
+    if (sw & DM_BTN_LEFT) m |= SB_LEFT;
+    if (sw & DM_BTN_RIGHT) m |= SB_RIGHT;
+    if (sw & DM_BTN_A) m |= SB_A;
+    if (sw & DM_BTN_B) m |= SB_B;
+    return m;
+}
+static void set_poll(void) {
+    uint64_t m = set_buttons(), now = m & ~g_set_held; double t = CACurrentMediaTime();
+    if (g_set_settle) {
+        if (m) { g_set_held = m; return; }
+        g_set_settle = 0; g_set_held = 0; [g_set_timer invalidate]; g_set_timer = nil;
+        if (g_win.isKeyWindow) input_resume();
+        LOG("front end: settings closed, the game has its input again");
+        return;
+    }
+    uint64_t dir = m & (SB_UP | SB_DOWN | SB_LEFT | SB_RIGHT);
+    if (m != g_set_held) LOG("front end: settings: controller buttons %#llx", (unsigned long long)m);
+    if (now & dir) g_set_rep = t + 0.4;
+    else if (dir && t >= g_set_rep) { now |= dir; g_set_rep = t + 0.09; }   // a direction pressed while the window is open repeats while held
+    if (!dir) g_set_rep = INFINITY;   // one held since before it opened never does
+    g_set_held = m;
+    if (now & (SB_B | SB_HOME)) { dm_settings_panel_nav(5); return; }
+    if (now & SB_UP) dm_settings_panel_nav(0);
+    if (now & SB_DOWN) dm_settings_panel_nav(1);
+    if (now & SB_LEFT) dm_settings_panel_nav(2);
+    if (now & SB_RIGHT) dm_settings_panel_nav(3);
+    if (now & SB_A) dm_settings_panel_nav(4);
+}
+static void settings_open(void) {
+    if (g_set_open || !g_win) return;
+    if (!dm_settings_panel_open((__bridge void *)g_win.contentView)) { LOG("front end: settings: this game has no settings list"); return; }
+    g_set_open = 1; g_set_settle = 0;
+    input_release(); display_awake(g_win.isKeyWindow);   // the game gets nothing while it is open; the display stays awake as in play
+    g_set_held = set_buttons(); g_set_rep = INFINITY;   // the press that opened it does not count, nor repeats
+    if (g_set_held) LOG("front end: settings: controller buttons %#llx held at open", (unsigned long long)g_set_held);
+    if (!g_set_timer) g_set_timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *t) { (void)t; set_poll(); }];
+    LOG("front end: settings open over the game");
+}
+// GameSettings.swift: the window closed (Resume, B, Escape, ⌘,)
+void front_settings_closed(void) {
+    if (!g_set_open) return;
+    g_set_open = 0; g_set_settle = 1;   // the timer gives the input back once the buttons are up
+    if (!g_set_timer) set_poll();
+}
+static void settings_toggle(void) { if (g_set_open) dm_settings_panel_close(); else settings_open(); }
+// Restart Game: the launcher (launcher.c) starts the host again with the saved choices when it exits with 75; DM_LAUNCHER_RESTART says there is such a launcher.
+// exit() runs the same handlers as ⌘Q (the save writer, the cheats' clean exit), as front_gpu_lost's
+int front_settings_restart(void) {
+    if (!getenv("DM_LAUNCHER_RESTART")) return 0;
+    LOG("front end: settings: Restart Game: the launcher starts the game again");
+    exit(75);
+}
+// The settings the front end itself applies while the game runs (HDR, the Metal HUD, the display mode), then those of settings_live.c. value NULL: whether env is one of them
+int front_setting_live(const char *env, const char *value) {
+    if (!env) return 0;
+    if (!strcmp(env, "DM_HDR")) {   // the layer changes format as when the window moves to a screen with or without EDR; nvn_hdr.inc reads the headroom at each frame
+        if (!value) return DM_GAME_HDR_N != 0;
+        g_hdr_want = !strcmp(value, "1"); setenv(env, value, 1);
+        if (g_hdr_want) hdr_apply(g_win.screen);
+        else if (g_layer_edr) { g_layer_edr = 0; g_layer.wantsExtendedDynamicRangeContent = NO; g_layer.colorspace = NULL; g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm; atomic_store(&g_edr_headroom, 0); }
+        hdr_timer();
+        LOG("front end: HDR %s (settings)", g_hdr_want ? "on" : "off");
+        return 1;
+    }
+    if (!strcmp(env, "DM_METAL_HUD")) {   // the layer's own HUD switch; MTL_HUD_ENABLED (front_hud_env) only counts at the process's first device
+        if (!value) return 1;
+        int on = !strcmp(value, "1"); setenv(env, value, 1);
+        g_layer.developerHUDProperties = on ? @{@"mode": @"default"} : @{@"mode": @"disabled"};
+        LOG("front end: Metal performance HUD %s (settings)", on ? "on" : "off");
+        return 1;
+    }
+    if (!strcmp(env, "DM_FULLSCREEN")) {
+        if (!value) return 1;
+        setenv(env, value, 1);
+        if ((strcmp(value, "0") != 0) != win_fullscreen(g_win)) [g_win toggleFullScreen:nil];
+        return 1;
+    }
+    return settings_live_apply(env, value);
+}
+// DM_CTL (hle_hid.c, any thread): "menu open", "menu close", "menu toggle", "menunav <code>", "menushot <png path>", "set <VAR>=<value>"
+void front_settings_ctl(const char *line) {
+    char *l = strdup(line);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!strcmp(l, "menu open")) settings_open();
+        else if (!strcmp(l, "menu close")) dm_settings_panel_close();
+        else if (!strcmp(l, "menu toggle")) settings_toggle();
+        else if (!strncmp(l, "menunav ", 8)) { if (g_set_open) dm_settings_panel_nav(atoi(l + 8)); }
+        else if (!strncmp(l, "menushot ", 9)) dm_settings_panel_snapshot(l + 9);
+        else if (!strncmp(l, "set ", 4)) { char *eq = strchr(l + 4, '='); if (eq) { *eq = 0; dm_settings_panel_set(l + 4, eq + 1); } }
+        else LOG("[RED] DM_CTL: %s: menu open | close | toggle, menunav <0-5>, menushot <path>, set <VAR>=<value>", l);
+        free(l);
+    });
+}
+@interface DmSettingsAction : NSObject @end
+@implementation DmSettingsAction
+- (void)toggle:(id)sender { (void)sender; settings_toggle(); }
+@end
+static DmSettingsAction *g_set_action;
 // The controller applet's prompt (front.h front_ctrl_support, ctrl_prompt.h; GitHub issue #1640): the game asked for more players than it sees, and the game's thread waits while
 // the prompt is up over the game, as the Switch's player screen. A controller that joins meanwhile is a player at once (its first button with DM_PAD_PRESS_TO_JOIN, its
 // connection without), and the count on the card follows. A and B are GameController's buttonA and buttonB on any controller, as the Home prompt's (a raw HID pad's A and B,
@@ -1776,7 +1921,7 @@ void front_run(void (*guest)(void)) {
         [win makeKeyAndOrderFront:nil];
         screen_refresh(win.screen ?: NSScreen.mainScreen);
         g_win = win;
-        if (g_hdr_want == 1) [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; hdr_apply(g_win.screen); }];   // the headroom follows the brightness
+        hdr_timer();   // the headroom follows the brightness
         [NSApp activateIgnoringOtherApps:YES];
         // A host another process starts (scripts/regress.py) is not activated (its focus state stays 2), so its window opened wherever it landed in the window order, and behind
         // another app's window macOS fires its display link about once a second: Breath of the Wild stepped up to 3 vsyncs at boot and never came back (20 fps runs).
@@ -1788,6 +1933,9 @@ void front_run(void (*guest)(void)) {
         // Main menu: AppKit runs ⌘ shortcuts only through menu items, so ⌘Q quits and ⌃⌘F toggles fullscreen from here (AppKit shows the item as Globe-F and keeps ⌃⌘F as a hidden twin)
         NSMenu *bar = [NSMenu new], *app = [NSMenu new], *wm = [[NSMenu alloc] initWithTitle:@"Window"];
         [[bar addItemWithTitle:@"" action:nil keyEquivalent:@""] setSubmenu:app];
+        g_set_action = [DmSettingsAction new];
+        [app addItemWithTitle:@"Settings…" action:@selector(toggle:) keyEquivalent:@","].target = g_set_action;   // the settings window over the game (GameSettings.swift)
+        [app addItem:NSMenuItem.separatorItem];
         [app addItemWithTitle:[@"Quit " stringByAppendingString:@(DM_GAME_NAME)] action:@selector(terminate:) keyEquivalent:@"q"];
         // Cheats (hle_cheats.c): the rows rebuild on every open through the delegate, the same rows the file reload changes
         g_cheats_menu = [DmCheatsMenuDelegate new];
@@ -1843,6 +1991,18 @@ void front_run(void (*guest)(void)) {
             if (e.window != win) return e;   // Only swallow keys for the game window; other windows such as the software keyboard input box receive typing as usual
             if (e.type == NSEventTypeKeyDown && (e.modifierFlags & NSEventModifierFlagCommand)) return e;   // ⌘ shortcuts go to the menu; a key released while ⌘ is held still reaches the game, or it would stay pressed
             if (e.type == NSEventTypeKeyDown && fn_shortcut(e)) return e;   // fn (Globe) + a letter is the system's (fn+F full screen, GitHub issue #873), not the game's F
+            if (g_set_open) {   // the settings window: Escape closes it, the arrow keys and Return move through its rows, other keys go to its controls
+                if (e.type != NSEventTypeKeyDown) return e;
+                switch (e.keyCode) {
+                case 53: dm_settings_panel_nav(5); return nil;
+                case 126: dm_settings_panel_nav(0); return nil;
+                case 125: dm_settings_panel_nav(1); return nil;
+                case 123: dm_settings_panel_nav(2); return nil;
+                case 124: dm_settings_panel_nav(3); return nil;
+                case 36: case 76: dm_settings_panel_nav(4); return nil;
+                }
+                return e;
+            }
             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
             return nil;   // Swallow it to avoid the system beep
         }];
@@ -1864,7 +2024,7 @@ void front_run(void (*guest)(void)) {
         // another app taking the key window during an unattended run read as a hang (no frame after the last focus change)
         static int keep = -1; if (keep < 0) keep = getenv("DM_FOCUS_KEEP") && atoi(getenv("DM_FOCUS_KEEP"));
         [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_release(); if (!win.miniaturized && !g_text_box && !keep) dm_focus_set(2); }];
-        [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_resume(); dm_focus_set(1); }];
+        [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; if (!g_set_open && !g_set_settle) input_resume(); dm_focus_set(1); }];   // the settings window keeps the input
         [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_release(); dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
         [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
         display_awake(win.isKeyWindow);   // the window may have become key (makeKeyAndOrderFront above) before these observers were installed

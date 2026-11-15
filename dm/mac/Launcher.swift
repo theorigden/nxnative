@@ -3,7 +3,9 @@
 // and so is the store: launcher.<VAR> in the app's preferences, which launcher.c reads when the window is not shown (docs/frontends.md, Saved choices). Basic settings (level basic) come
 // first, the others under Advanced settings, each in the list's sections. Play puts the settings into this process's environment, which the host inherits; Quit and closing the window end the
 // app without the game. "Show this window at launch" off: no window unless Option is held at launch, and launcher.c applies the saved choices. The window never takes focus by itself: an app
-// opened in the background (open -g) keeps its window behind until the player switches to it
+// opened in the background (open -g) keeps its window behind until the player switches to it.
+// The same view opens over the running game (dm/mac/GameSettings.swift, linked into the Mac host): with InGameActions, Play becomes Resume, Quit quits the game, and Restart Game
+// appears once a choice needs the next start
 import AppKit
 import QuartzCore
 import SwiftUI
@@ -117,10 +119,18 @@ enum SaveCheck {
     }
 }
 
+/// The window over the running game (GameSettings.swift): its buttons instead of Play and Quit; restart nil when the game cannot be started again from here (no launcher)
+struct InGameActions {
+    let resume: () -> Void
+    let quit: () -> Void
+    let restart: (() -> Void)?
+}
+
 struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let done: (Bool) -> Void
     let fit: (CGFloat) -> Void
+    var inGame: InGameActions? = nil
     @AppStorage("window.show") private var show = true
     @AppStorage("window.advanced") private var advanced = false
     @State private var checking = false
@@ -159,6 +169,19 @@ struct LauncherView: View {
             } action: { _, extraHeight in
                 fit(extraHeight)
             }
+            if let g = inGame {
+                HStack {
+                    Toggle("Show this window at launch", isOn: $show).toggleStyle(.checkbox)
+                    Spacer()
+                    if m.pendingRestart {
+                        Text("Some changes apply at next start").foregroundStyle(.secondary)
+                        if let r = g.restart { Button("Restart Game", action: r) }
+                    }
+                    Button("Quit Game", action: g.quit)
+                    Button("Resume", action: g.resume).keyboardShortcut(.defaultAction)
+                }
+                .padding(20)
+            } else {
             HStack {
                 Toggle("Show this window at launch", isOn: $show).toggleStyle(.checkbox)
                 Spacer()
@@ -171,6 +194,7 @@ struct LauncherView: View {
                 Button("Play") { start() }.keyboardShortcut(.defaultAction).disabled(checking)
             }
             .padding(20)
+            }
         }
         .frame(minWidth: 520, idealWidth: 560)
     }

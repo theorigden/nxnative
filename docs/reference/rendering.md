@@ -2083,6 +2083,14 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Check:** the [Duo harness](../../dm/ios/tests/duo/README.md) tests the taller picture in Fit, in Fill and on a wider screen, and the production root view following a reported shape and returning to 16:9. Not yet run on a device.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#screen-shape-dm_screen_aspect-current) and [Animal Crossing: New Horizons](../../dm/games/01006F8002326000/README.md#screen-shape-dm_screen_aspect-current) with `DM_SCREEN_ASPECT=1.43`.
 
+### A screen wider than 16:9: the picture widens, the HUD stays in the middle
+
+- **Symptom:** on an iPhone in landscape (2.17:1) *Picture shape: Match screen* gave a 16:9 picture with black bars at the sides: `DM_SCREEN_ASPECT` and its `auto` took only 1.3 to 1.77, screens taller than 16:9.
+- **Cause:** the screen-shape mechanism (`loader.c` `dm_fps_state_apply`, the profile's stubs) kept the output 1920 wide and grew its height, and the field-of-view stubs widened the vertical angle by k = (16/9) / ratio, which a wider screen would have narrowed.
+- **Fix:** the loader takes 1.3 to 2.4 (16:9 itself, 1.77 to 1.78, stays 16:9), and the iOS `auto` passes them. A wider ratio, only for a profile with `output_size on` (its stubs take an output width; others keep 16:9 with a log line), keeps the output's height (1080, or `DM_OUTPUT_RES`'s) and widens it in multiples of 12 (2.167 → 2340x1080), keeps the layout 720 high and widens it (state +0x6c int, +0x70 float: 1560x720), and sets k = 1 so the 16:9 camera takes the screen's ratio with its vertical angle unchanged. The HUD's orthographic projection comes from the state page (+0xa0 / +0xa4: the screen in 1920x1080 units, as large as fits around it), so the HUD keeps its size in the 16:9 middle, which on an iPhone is inside the safe area (a 15 Pro Max: 764 of 932 points, 84 from each side against 59 of inset); full-screen panes are stretched sideways (+0x9c, the anchoring rule's horizontal stretch).
+- **Check:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md#screen-shape) on the Mac at 2.17, 1.5 and 16:9 (windowed). Not yet run on an iPhone.
+- **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md#screen-shape) (2026-11-15).
+
 ### Mac fullscreen below a camera housing
 
 - **Symptom:** in fullscreen on a MacBook with a camera housing (the notch), the strip beside it stays black and the picture is centred on the screen below it, so a picture of the whole screen's shape cannot fill the screen.

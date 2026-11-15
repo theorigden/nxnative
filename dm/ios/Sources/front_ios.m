@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
+#include "settings_live.h"
 #include "front.h"
 #include "hle.h"
 #include "dm.h"
@@ -150,14 +151,20 @@ static void launcher_done(void) { [g_root startGame]; }
     front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
     const char *dev = front_ios_device_check();   // that first device: a GPU without BC textures is refused here, not at launch, so the launcher's HUD switch counts
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
-    {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1; loader.c
-        // takes 1.3 to 1.77), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved here, before the
-        // host writes the state page (main.c dm_fps_state_apply)
+    {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1) or wider
+        // (an iPhone's 2.17:1 in landscape; loader.c takes 1.3 to 2.4 and keeps 16:9 for a profile without output-size stubs), else 16:9. The window's, not the screen's: on an
+        // iPad under Stage Manager or Split View the app does not fill the screen. The picture then fills the whole window, behind the Dynamic Island and the rounded corners
+        // (dm_layout fits it to the bounds, not the safe area); a wider picture keeps its HUD in the 16:9 middle, which clears them: on an iPhone 15 Pro Max (932x430 points,
+        // landscape safe-area insets 59 left and right, 21 at the bottom) the middle is 764 points wide, 84 from each side. Resolved here, before the host writes the state
+        // page (main.c dm_fps_state_apply)
         const char *a = getenv("DM_SCREEN_ASPECT");
         if (a && !strcmp(a, "auto")) {
             CGSize sz = self.view.window ? self.view.window.bounds.size : UIScreen.mainScreen.bounds.size; double r = MAX(sz.width, sz.height) / MAX(MIN(sz.width, sz.height), 1);
-            char v[16]; if (r >= 1.3 && r < 1.77) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
+            char v[16]; if (r >= 1.3 && r <= 2.4 && !(r >= 1.77 && r < 1.78)) snprintf(v, sizeof v, "%.3f", r); else strcpy(v, "0");
             setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points (%.3f:1) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, r, v);
+            UIEdgeInsets si = self.view.window ? self.view.window.safeAreaInsets : UIEdgeInsetsZero;
+            if (r > 1.78) LOG("front end: picture shape auto: safe-area insets %.0f / %.0f / %.0f / %.0f points (top / left / bottom / right); the HUD's 16:9 middle leaves %.0f points at each side",
+                              si.top, si.left, si.bottom, si.right, (MAX(sz.width, sz.height) - MIN(sz.width, sz.height) * 16.0 / 9.0) / 2);
         }
     }
     self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
@@ -288,7 +295,7 @@ bool dm_setting_live(const char *env, const char *value) {
     if (!strcmp(env, "DM_SHOW_FPS")) { if (value) [g_root showFPS:atoi(value) != 0]; return true; }
     if (!strcmp(env, "DM_TOUCH_HAPTICS")) { if (value) dm_gamepad_touch_feedback(atoi(value) != 0); return true; }
     if (!strcmp(env, "DM_RUMBLE")) { if (value) { dm_haptics_set_enabled(atoi(value) != 0); LOG("front end: game rumble %s (in-game menu)", atoi(value) ? "on" : "off"); } return true; }
-    return false;
+    return settings_live_apply(env, value) != 0;   // the host's (settings_live.c): the tone map and its grade, the frame rate and render scale of a frame step page, rumble strength
 }
 @interface DmTVSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;

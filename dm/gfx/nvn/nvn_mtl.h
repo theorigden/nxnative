@@ -73,3 +73,4 @@ void mtl_present_wait_texture(uint64_t ticket, uint64_t copy);   // the next acq
 typedef struct { int curve, look, game_sat; float ev, contrast, saturation, black, peak; } dm_grade;
 void mtl_grade_get(dm_grade *g);
 void mtl_grade_set(const dm_grade *g);
+int mtl_present_upscale_set(int on);   // DM_PRESENT_UPSCALE while the game runs: 1 MetalFX, 0 bilinear; 0 returned when this GPU has no MetalFX spatial scaler

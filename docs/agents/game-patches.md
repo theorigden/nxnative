@@ -592,13 +592,13 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`game`**, frame rate, at goal, checked: 1.4.3 main: one function of each fingerprint; the rule rewrites it byte-identical to its former build entry (2026-11-09): 60 fps frame step and render scale. The game's own timing object, found by its six functions' fingerprints on any build that keeps them; no engine sibling shares the code (BotW, SMO, MK8D, ACNH, Splatoon 2 / 3, Kirby, Mario Party, Ocarina, Smash, Metroid Dread, Origami King: no exact match, 2026-11-09)
 - **`build` → `game`**, rendering, blocked: no function-matched form yet: build 1.4.3 only (FRAME_STEP), judgement: screen shape and output size. The display size, layout size, crop, final image and HUD projection in nnMain, agl and the display objects, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate / CalculateGlobalMatrix
 
-- **1.4.3 `main`** `277178b7…` ([patches.py:325](../../dm/games/0100F2C0115B6000/patches.py#L325))
+- **1.4.3 `main`** `277178b7…` ([patches.py:337](../../dm/games/0100F2C0115B6000/patches.py#L337))
   <details><summary>29 frame-step sites</summary>
 
   - frame step `+0x8d860`: final image (agl::RenderDisplay) 1920x1080 → the host's output size
   - frame step `+0xd5cc0`: view render size x the host render scale (1.0 = original)
   - frame step `+0xd5d80`: dynamic resolution only at render scale 1.0
-  - frame step `+0x1c0a50`: HUD projection 1920x1080 → 1920 wide in the output's shape
+  - frame step `+0x1c0a50`: HUD projection 1920x1080 → the host's, in the output's shape
   - frame step `+0x1fbc80`: D-pad menu fade starts at full rate under fractional steps (FPSLocker)
   - frame step `+0x2daa54`: game step reads the float fps (original integer fps and scvtf when off)
   - frame step `+0x2daa6c`: scvtf moved into the stub at the load
@@ -613,7 +613,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x8c3fe8`: 1280x720 defaults of an object (eight slots)
   - frame step `+0x92d94c`: HeapDef sizes: Graphics and DynamicTextureAllocatorMem grow with 3D views past 1600x1080 (an output size from the host)
   - frame step `+0xbdb584`: display size 1920x1080 (window textures, frame buffer) → the host's output size
-  - frame step `+0xbdb6a0`: layout size 1280x720 → the host's layout height
+  - frame step `+0xbdb6a0`: layout size 1280x720 → the host's layout size
   - frame step `+0xbe14a8`: swapchain argument 1 when on (FPSLocker)
   - frame step `+0xc02694`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
   - frame step `+0xd4275c`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
