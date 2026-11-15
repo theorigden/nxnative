@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,6 +107,36 @@ static void device_name(char *out, size_t n) {   // the model ("Mac16,1", "iPhon
     if (sysctlbyname(TARGET_OS_OSX ? "hw.model" : "hw.machine", model, &len, NULL, 0)) model[0] = 0;
     snprintf(out, n, "%s", model[0] ? model : "unknown");
 }
+
+// ---------- the player's notice (front_save_sync_note) ----------
+void ss_device_kind(const char *model, char *out, size_t n) {
+    const char *k = !strncmp(model, "iPhone", 6) ? "iPhone" : !strncmp(model, "iPad", 4) ? "iPad"
+                  : (!strncmp(model, "Mac", 3) || !strncmp(model, "iMac", 4)) ? "Mac" : "another device";   // Mac16,1, MacBookPro18,2, Macmini9,1, iMac21,1
+    snprintf(out, n, "%s", k);
+}
+void ss_when_friendly(int64_t t, int64_t now, char *out, size_t n) {
+    time_t tt = (time_t)t, nn = (time_t)now; struct tm a, b;
+    if (!t || !localtime_r(&tt, &a) || !localtime_r(&nn, &b)) { snprintf(out, n, "at an unknown time"); return; }
+    char hm[8]; strftime(hm, sizeof hm, "%H:%M", &a);
+    struct tm d = b; d.tm_mday -= 1; d.tm_hour = 12; d.tm_isdst = -1; time_t yt = mktime(&d); struct tm y; localtime_r(&yt, &y);   // the day before today, whatever the month
+    if (a.tm_year == b.tm_year && a.tm_yday == b.tm_yday) snprintf(out, n, "today at %s", hm);
+    else if (a.tm_year == y.tm_year && a.tm_yday == y.tm_yday) snprintf(out, n, "yesterday at %s", hm);
+    else { char day[16]; strftime(day, sizeof day, "%e %b", &a); snprintf(out, n, "on %s at %s", day + (day[0] == ' '), hm); }
+}
+static void note(ss_note kind, double seconds, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+static void note(ss_note kind, double seconds, const char *fmt, ...) {
+    char text[256]; va_list ap; va_start(ap, fmt); vsnprintf(text, sizeof text, fmt, ap); va_end(ap);
+    front_save_sync_note(kind, text, seconds);
+}
+static void this_device(char *out, size_t n) {   // "this Mac", "this iPhone", "this iPad", "this device"
+    char model[64], kind[24]; device_name(model, sizeof model); ss_device_kind(model, kind, sizeof kind);
+    snprintf(out, n, "this %s", strcmp(kind, "another device") ? kind : "device");
+}
+static void from_device(const ss_meta *m, char *out, size_t n) {   // "your iPhone", "your Mac", "another device"
+    char kind[24]; ss_device_kind(m->device, kind, sizeof kind);
+    snprintf(out, n, "%s%s", strcmp(kind, "another device") ? "your " : "", kind);
+}
+__attribute__((weak)) void front_save_sync_note(ss_note kind, const char *text, double seconds) { (void)kind; (void)text; (void)seconds; }
 
 static void upper_title(const char *title, char *out, size_t n) {   // one spelling of the title ID in the cloud, whoever packed the app
     size_t i = 0; for (; title[i] && i + 1 < n; i++) out[i] = (char)toupper((unsigned char)title[i]);
@@ -359,8 +390,10 @@ static int cloud_path(const char *v, const char *title, char *out, size_t n) {
         const char *home = getenv("HOME"); char drive[PATH_MAX]; struct stat st;
         snprintf(drive, sizeof drive, "%s/Library/Mobile Documents/com~apple~CloudDocs", home ? home : "");
         if (!home || stat(drive, &st)) {
-            if (errno == EPERM || errno == EACCES) SLOG("off: this app may not open iCloud Drive (System Settings > Privacy & Security > Files and Folders)");
-            else SLOG("off: iCloud Drive is not on for this Mac (no %s)", drive);
+            if (errno == EPERM || errno == EACCES) {
+                SLOG("off: this app may not open iCloud Drive (System Settings > Privacy & Security > Files and Folders)");
+                note(SS_NOTE_WARN, 8, "iCloud saves are off: allow this app in System Settings > Privacy & Security > Files and Folders");
+            } else { SLOG("off: iCloud Drive is not on for this Mac (no %s)", drive); note(SS_NOTE_WARN, 8, "iCloud saves are off: iCloud Drive is not on for this Mac"); }
             return 0;
         }
         snprintf(dir, sizeof dir, "%s/nxnative Saves", drive);
@@ -535,7 +568,8 @@ undo:
 // What this device committed goes to the cloud, unless the cloud already has it. It replaces only what it was compared against: no save, the save last synced
 // (<save>.sync), or a damaged file (kept first). A cloud save that changed since this device's last sync (another device sent it, or this device never synced) is
 // not replaced: the next start decides between the two (ss_decide: the newer one, or the player's choice when a front end asks).
-// 1 = in step with the cloud, 0 = not: the cloud cannot be read or written now (the next Commit, a flush or the Mac launcher tries again), or it waits for the next start
+// 2 = sent, 1 = already in step with the cloud, 0 = not: the cloud cannot be read or written now (the next Commit, a flush or the Mac launcher tries again),
+// -1 = not: it waits for the next start (the player's notice differs; callers take <= 0 as not in step)
 static int send_save(const char *save, const char *title, const char *cloud) {
     char tmp[PATH_MAX], snap[PATH_MAX], packed[PATH_MAX], theirs[PATH_MAX], base[SS_HASH + 1], dir[PATH_MAX], kept[PATH_MAX], t[32];
     ss_meta mine, other; int ok = 0, got;
@@ -562,12 +596,16 @@ static int send_save(const char *save, const char *title, const char *cloud) {
     else if (got && other.files && strcmp(other.hash, base)) {
         static _Atomic int told;   // once a session: the sender comes here after every Commit
         when(other.saved, t, sizeof t);
-        if (!atomic_exchange(&told, 1)) SLOG("not sent: the cloud's save (from %s, saved %s) changed since this device's last sync, and so did this one; the next start decides between the two", other.device, t);
-        goto done;
+        if (!atomic_exchange(&told, 1)) {
+            SLOG("not sent: the cloud's save (from %s, saved %s) changed since this device's last sync, and so did this one; the next start decides between the two", other.device, t);
+            char who[32]; from_device(&other, who, sizeof who);
+            note(SS_NOTE_WARN, 6, "iCloud: the save in iCloud changed on %s; this one is not sent, and the next start decides between the two", who);
+        }
+        ok = -1; goto done;
     }
     snprintf(dir, sizeof dir, "%s", cloud); *strrchr(dir, '/') = 0;
     if (mkdirs(dir) || front_save_sync_store(packed, cloud) != 1) { SRED("sending to %s failed (errno=%d)", cloud, errno); goto done; }
-    write_base(save, mine.hash); ok = 1;
+    write_base(save, mine.hash); ok = 2;
     when(mine.saved, t, sizeof t);
     SLOG("sent: %d files, saved %s, to %s", mine.files, t, cloud);
 done:
@@ -595,11 +633,14 @@ static void *sender(void *arg) {
             if (g_commits == seen) break;
             seen = g_commits;
         }
-        uint64_t upto = g_commits; g_want = 0; g_busy = 1;
+        uint64_t upto = g_commits; g_want = 0; g_busy = 1; int was_failed = g_failed;
         pthread_mutex_unlock(&g_mu);
         int ok = send_save(g_save, g_title, g_cloud);
+        // The player's notice: each save that reaches the cloud, and the first send that does not (not again until one goes through)
+        if (ok == 2) note(SS_NOTE_OK, 2.5, "Saved to iCloud");
+        else if (!ok && !was_failed) note(SS_NOTE_WARN, 5, "iCloud: the save could not be sent; it is tried again after the next save");   // -1 (waits for the next start): send_save told the player once
         pthread_mutex_lock(&g_mu);
-        g_busy = 0; g_sent = upto; g_failed = !ok;
+        g_busy = 0; g_sent = upto; g_failed = ok <= 0;
         pthread_cond_broadcast(&g_cv);
     }
     return NULL;
@@ -612,62 +653,103 @@ static int mount_once(const char *save, const char *title) {
     char cloud[PATH_MAX], tmp[PATH_MAX], theirs[PATH_MAX], base[SS_HASH + 1], kept[PATH_MAX], t[32], t2[32], chosen[SS_HASH + 1];
     ss_meta mine, other; memset(&other, 0, sizeof other); kept[0] = 0;
     pull_journal j; int jr = journal_read(save, &j);
-    if (jr < 0) { SRED("%s.pull, the journal of a pull of the cloud's save, cannot be read (errno=%d): the save is not mounted; this device's save is in place or in %s-backups", save, errno, save); return -1; }
+    if (jr < 0) {
+        SRED("%s.pull, the journal of a pull of the cloud's save, cannot be read (errno=%d): the save is not mounted; this device's save is in place or in %s-backups", save, errno, save);
+        note(SS_NOTE_WARN, 8, "iCloud: an unfinished load of the save cannot be checked; the save is not opened this time (it is kept)");
+        return -1;
+    }
     if (jr) {
         SLOG("a pull of the cloud's save did not finish: putting this device's save back");
-        if (recover(save, &j)) { SRED("this device's save could not be put back (errno=%d): it is not mounted; what is not in %s is kept in %s, and the next start tries again", errno, save, *j.kept ? j.kept : "its backups"); return -1; }
+        if (recover(save, &j)) {
+            SRED("this device's save could not be put back (errno=%d): it is not mounted; what is not in %s is kept in %s, and the next start tries again", errno, save, *j.kept ? j.kept : "its backups");
+            note(SS_NOTE_WARN, 8, "iCloud: an unfinished load of the save could not be undone; the save is not opened this time (it is kept, and the next start tries again)");
+            return -1;
+        }
         SLOG("this device's save is back as it was before that pull");
     }
     if (!cloud_file(title, cloud, sizeof cloud)) return 0;
     SLOG("on: %s", cloud);
     snprintf(tmp, sizeof tmp, "%s.sync-tmp", save); snprintf(theirs, sizeof theirs, "%s/in.dmsync", tmp);
-    if (rm_tree(tmp) || mkdirs(tmp)) { SRED("cannot make %s (errno=%d): off", tmp, errno); return 0; }   // rm_tree: what an earlier session left
-    if (ss_scan(save, &mine)) { SRED("this device's save %s cannot be read (errno=%d): off", save, errno); return 0; }
+    if (rm_tree(tmp) || mkdirs(tmp)) {   // rm_tree: what an earlier session left
+        SRED("cannot make %s (errno=%d): off", tmp, errno); note(SS_NOTE_WARN, 6, "iCloud saves are off this time: a work folder could not be made"); return 0;
+    }
+    if (ss_scan(save, &mine)) {
+        SRED("this device's save %s cannot be read (errno=%d): off", save, errno); note(SS_NOTE_WARN, 6, "iCloud saves are off this time: the save on this device could not be read"); return 0;
+    }
     read_base(save, base);
     choice_kind choice = read_choice(chosen);
-    int got = choice == CH_OFFLINE ? -1 : fetch_timed(cloud, theirs, FETCH_MS), both = 0, failed = 0, pr;
-    if (got > 0 && ss_read(theirs, NULL, &other)) { SRED("the cloud's save %s is damaged: playing on with this device's, which replaces it (the damaged file is kept)", cloud); got = 0; }
-    else if (got > 0 && strcasecmp(other.title, title)) { SRED("the cloud's save %s is %s's, not %s's: not used", cloud, other.title, title); got = -1; }
+    int got = choice == CH_OFFLINE ? -1 : fetch_timed(cloud, theirs, FETCH_MS), both = 0, failed = 0, pr, damaged = 0, stale = 0;
+    char here[32], who[32], at[40]; int64_t tnow = (int64_t)time(NULL); this_device(here, sizeof here);   // for the player's notice
+    if (got > 0 && ss_read(theirs, NULL, &other)) { SRED("the cloud's save %s is damaged: playing on with this device's, which replaces it (the damaged file is kept)", cloud); got = 0; damaged = 1; }
+    else if (got > 0 && strcasecmp(other.title, title)) {
+        SRED("the cloud's save %s is %s's, not %s's: not used", cloud, other.title, title); got = -1;
+        note(SS_NOTE_WARN, 6, "iCloud: the save in iCloud is another game's; playing the save on %s, which is not sent", here);
+    } else if (got < 0 && choice == CH_OFFLINE) note(SS_NOTE_WARN, 5, "iCloud: playing the save on %s without iCloud, as you chose", here);
+    else if (got < 0) note(SS_NOTE_WARN, 6, "iCloud is not reachable: playing the save on %s. It is compared with iCloud's and sent after the next save", here);
     if (got < 0) { SLOG("playing on with this device's save; it is not sent until it has been compared with the cloud's"); failed = 1; }
     ss_way way = got < 0 ? SS_KEEP : ss_decide(mine.hash, base, got ? other.hash : "", mine.saved, other.saved, choice != CH_NONE, &both);
     // The player's choice, for the save it was made on (the cloud's may have changed between the check and this mount)
     const char *now = got > 0 && other.files ? other.hash : "none";
     if ((choice == CH_CLOUD || choice == CH_LOCAL) && got >= 0 && way != SS_KEEP) {
-        if (strcmp(choice == CH_CLOUD ? chosen : (*chosen ? chosen : "none"), now))   // the way stays ss_decide's: a save that changed on both sides is replaced on neither
-            SRED("the cloud's save changed after the player chose (now %s): the choice is not used", now);
-        else way = choice == CH_CLOUD ? SS_PULL : SS_PUSH;
+        if (strcmp(choice == CH_CLOUD ? chosen : (*chosen ? chosen : "none"), now)) {   // the way stays ss_decide's: a save that changed on both sides is replaced on neither
+            SRED("the cloud's save changed after the player chose (now %s): the choice is not used", now); stale = 1;
+        } else way = choice == CH_CLOUD ? SS_PULL : SS_PUSH;
     } else if (choice == CH_OFFLINE) SLOG("the player chose to play with this device's save without the cloud's");
     switch (way) {
     case SS_PULL:
         when(other.saved, t, sizeof t);
         if ((pr = pull(save, theirs, &other, kept, sizeof kept))) {
-            if (pr == -2) { SRED("bringing the cloud's save in failed (errno=%d), and this device's could not all be put back: it is not mounted; what is not in %s is kept in %s, and the next start tries again", errno, save, kept); rm_tree(tmp); return -1; }
+            if (pr == -2) {
+                SRED("bringing the cloud's save in failed (errno=%d), and this device's could not all be put back: it is not mounted; what is not in %s is kept in %s, and the next start tries again", errno, save, kept); rm_tree(tmp);
+                note(SS_NOTE_WARN, 8, "iCloud: the save in iCloud could not be loaded, nor the one on %s put back; the save is not opened this time (it is kept, and the next start tries again)", here);
+                return -1;
+            }
             SRED("bringing the cloud's save in failed (errno=%d): playing on with this device's", errno);
+            note(SS_NOTE_WARN, 6, "iCloud: the %s save could not be loaded; playing the one on %s", choice == CH_CLOUD ? "chosen" : "newer", here);
             failed = 1; break;
         }
         write_base(save, other.hash);
         SLOG("brought in the cloud's save (from %s, saved %s%s)%s%s", other.device, t, choice == CH_CLOUD ? ", the player's choice" : both ? ", the newer of two that both changed" : "", *kept ? "; this device's is kept in " : "", kept);
+        from_device(&other, who, sizeof who); ss_when_friendly(other.saved, tnow, at, sizeof at);
+        note(SS_NOTE_IN, 5, "iCloud: loaded the save %sfrom %s, saved %s", choice == CH_CLOUD && !stale ? "you chose " : "", who, at);
         break;
     case SS_PUSH:
         // Over a cloud save that changed since the last sync (the newer of two that both changed, or the player's choice): the start chose against it, so it is kept
         // first and counts as the one last synced; the sender replaces only that one (send_save), not a save another device sends meanwhile
         if (got > 0 && other.files && strcmp(other.hash, base)) {
-            if (backup_dir(save, "cloud", kept, sizeof kept, 1) || ss_read(theirs, kept, &other)) { SRED("cannot keep the cloud's save before replacing it (errno=%d): not sent", errno); failed = 1; break; }
+            if (backup_dir(save, "cloud", kept, sizeof kept, 1) || ss_read(theirs, kept, &other)) {
+                SRED("cannot keep the cloud's save before replacing it (errno=%d): not sent", errno); failed = 1;
+                note(SS_NOTE_WARN, 6, "iCloud: the save in iCloud could not be kept before replacing it; playing the save on %s, which is not sent", here);
+                break;
+            }
             write_base(save, other.hash);
         }
         when(mine.saved, t, sizeof t); when(other.saved, t2, sizeof t2);
         SLOG("this device's save (saved %s) %s: it goes to the cloud", t, !got || !other.files ? "is not in the cloud yet" : choice == CH_LOCAL ? "is the player's choice" : both ? "is the newer of two that both changed" : "changed since the last sync");
         if (*kept) SLOG("the cloud's save it replaces (from %s, saved %s) is kept in %s", other.device, t2, kept);
         g_want = 1;
+        if (damaged) note(SS_NOTE_OUT, 5, "iCloud: the save in iCloud was damaged; sending the one on %s (the damaged file is kept)", here);
+        else if (got && other.files && choice == CH_LOCAL && !stale) note(SS_NOTE_OUT, 5, "iCloud: sending the save on %s, as you chose; the one in iCloud is kept as a backup", here);
+        else note(SS_NOTE_OUT, 4, "iCloud: the save on %s is the newest; sending it", here);
         break;
     case SS_ASK:
         when(other.saved, t, sizeof t); when(mine.saved, t2, sizeof t2);
         SLOG("both changed: the cloud's save (from %s, saved %s) and this device's (saved %s); playing on with this device's, and neither replaces the other until the player chooses at the next start", other.device, t, t2);
         failed = 1;
+        from_device(&other, who, sizeof who);
+        if (stale) note(SS_NOTE_WARN, 8, "iCloud: the save in iCloud changed on %s after you chose; playing the save on %s. Choose again at the next start", who, here);
+        else note(SS_NOTE_WARN, 8, "iCloud: the save on %s and the one from %s both changed; playing this one. Choose between them at the next start", here, who);
         break;
     case SS_KEEP:
-        if (got > 0 && mine.files) { write_base(save, mine.hash); SLOG("in step with the cloud"); }
-        else if (!got) SLOG("no save here or in the cloud yet");
+        if (got > 0 && mine.files) {
+            write_base(save, mine.hash); SLOG("in step with the cloud");
+            ss_when_friendly(mine.saved, tnow, at, sizeof at);
+            note(SS_NOTE_OK, 4, "iCloud: save up to date, saved %s", at);
+        } else if (!got) {
+            SLOG("no save here or in the cloud yet");
+            if (damaged) note(SS_NOTE_WARN, 5, "iCloud: the save in iCloud was damaged; the first save here replaces it (the damaged file is kept)");
+            else note(SS_NOTE_OK, 4, "iCloud saves on: the first save goes to iCloud");
+        }
         break;
     }
     rm_tree(tmp);
@@ -743,7 +825,7 @@ int save_sync_after_exit(const char *save, const char *title) {   // save: DM_SA
     snprintf(dd, sizeof dd, "%s", save); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
     pull_journal j;
     if (journal_read(dd, &j)) { SRED("a pull of the cloud's save did not finish: nothing is sent until the next start puts this device's save back"); return 0; }   // what is in place may be half the cloud's
-    return !cloud_file(title, cloud, sizeof cloud) || send_save(dd, title, cloud);
+    return !cloud_file(title, cloud, sizeof cloud) || send_save(dd, title, cloud) > 0;
 }
 
 // ---------- the platform's parts: these defaults are plain file copies, which the Mac's iCloud Drive takes (it downloads a file a read asks for) ----------

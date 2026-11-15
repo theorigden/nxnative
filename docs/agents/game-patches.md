@@ -43,6 +43,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | `build` → `engine` | RE Engine's frame limit at a fixed pointer | frame rate | blocked: one RE Engine game here | judgement | 1 | [Monster Hunter Rise](../../dm/games/0100B04011742000/README.md) | engine code other RE Engine games ship |
 | `build` → `engine` | Unity's constant-buffer table locked on the shared device | race | blocked: the stubs have no function-matched form yet, and no other Unity 2018.4 main on the drive shares these functions (Ori and the Blind Forest 1.0.2: no fingerprint match) | checked: probes of both threads inserting the same key and of the table API's callers by thread; Blind Forest main compared with nso_fnmap | 1 | [Ori and the Will of the Wisps](../../dm/games/01008DD013200000/README.md) | Unity 2018.4's threaded GfxDevice: the main thread registers layouts on the real device while the render thread uses the same table; any Unity 2018.4 build with this code has the race |
 | `build` → `game` | 60 fps frame step on 1.3.0 (the same stub at its known addresses) | frame rate | blocked: 1.3.0's main is on neither drive to fingerprint (v458752 is the update on them) | judgement | 1 | [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md) | the stub above, placed at 1.3.0's addresses: the matched rule would serve it once its functions are fingerprinted |
+| `build` → `game` | screen shape and output size | rendering | blocked: no function-matched form yet: build 1.4.3 only (FRAME_STEP) | judgement | 1 | [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md) | the display size, layout size, crop, final image and HUD projection in nnMain, agl and the display objects, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate |
 | `build` → `game` | screen shape: the sizes, the view, the layouts' projection and their edge widgets (DM_SCREEN_ASPECT) | rendering | blocked: the stubs have no function-matched form yet | judgement | 1 | [Animal Crossing: New Horizons](../../dm/games/01006F8002326000/README.md) | the output size is the host's, but where the game takes its sizes, its cameras and its layouts are this build's code |
 | `build` → `game` | 60 fps intervals and dynamic-resolution constants | frame rate | kept: 1.0.3 (v131072) is the newest update of both releases and likely their last: a function match would serve no other build; the rewriter would also need matched rules that write fixups and declare capabilities, a new mechanism (2026-11-09) | checked: both releases' mains, where the host's rows for them were found; the global main's sites mapped into ASTRAL CHAIN and Bayonetta 1-3 (2026-11-09) | 2 | [NieR:Automata The End of YoRHa Edition (010056B015FE8000)](../../dm/games/010056B015FE8000/README.md); [NieR:Automata The End of YoRHa Edition (0100B8E016F76000)](../../dm/games/0100B8E016F76000/README.md) | the game's own constants; the Asian release's function is the global one's 0x13c0 further on, so one function-matched rule could serve both releases. No PlatinumGames sibling shares the code: none of its sites has an exact match in ASTRAL CHAIN or Bayonetta 1-3 (nso_fnmap, 2026-11-09) |
 | `build` → `game` | NieR's frame interval and dynamic-resolution floor at fixed addresses | frame rate | kept: 1.0.3 (v131072) is the newest update of both releases and likely their last: a function match would serve no other build; the rewriter would also need matched rules that write fixups and declare capabilities, a new mechanism (2026-11-09) | checked: both releases' mains, where these rows were found; the global main's sites mapped into ASTRAL CHAIN and Bayonetta 1-3 (2026-11-09) | 2 | [NieR:Automata The End of YoRHa Edition (010056B015FE8000)](../../dm/games/010056B015FE8000/README.md); [NieR:Automata The End of YoRHa Edition (0100B8E016F76000)](../../dm/games/0100B8E016F76000/README.md) | the game's own display object; the Asian release's function is the global one's 0x13c0 further on, so the rewriter's function match could give the host both releases' addresses. No PlatinumGames sibling shares the code: none of its sites has an exact match in ASTRAL CHAIN or Bayonetta 1-3 (nso_fnmap, 2026-11-09) |
@@ -81,7 +82,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 43 | 0 | 0 | `build` → `game` ×2 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 2 | 0 | 0 | `game` ×2 |
-| [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 9 | 0 | 0 | `game` |
+| [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 34 | 0 | 0 | `game`, `build` → `game` |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Xenoblade Chronicles X: Definitive Edition](#xenoblade-chronicles-x-definitive-edition) | 6 | 0 | 1 | 1 | 0 | `game` ×2 |
 
@@ -589,7 +590,40 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), `0100F2C0115B6000`, [patches.py](../../dm/games/0100F2C0115B6000/patches.py).
 
 - **`game`**, frame rate, at goal, checked: 1.4.3 main: one function of each fingerprint; the rule rewrites it byte-identical to its former build entry (2026-11-09): 60 fps frame step and render scale. The game's own timing object, found by its six functions' fingerprints on any build that keeps them; no engine sibling shares the code (BotW, SMO, MK8D, ACNH, Splatoon 2 / 3, Kirby, Mario Party, Ocarina, Smash, Metroid Dread, Origami King: no exact match, 2026-11-09)
+- **`build` → `game`**, rendering, blocked: no function-matched form yet: build 1.4.3 only (FRAME_STEP), judgement: screen shape and output size. The display size, layout size, crop, final image and HUD projection in nnMain, agl and the display objects, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate
 
+- **1.4.3 `main`** `277178b7…` ([patches.py:259](../../dm/games/0100F2C0115B6000/patches.py#L259))
+  <details><summary>25 frame-step sites</summary>
+
+  - frame step `+0x8d860`: final image (agl::RenderDisplay) 1920x1080 → the host's output size
+  - frame step `+0xd5cc0`: view render size x the host render scale (1.0 = original)
+  - frame step `+0xd5d80`: dynamic resolution only at render scale 1.0
+  - frame step `+0x1c0a50`: HUD projection 1920x1080 → 1920 wide in the output's shape
+  - frame step `+0x1fbc80`: D-pad menu fade starts at full rate under fractional steps (FPSLocker)
+  - frame step `+0x2daa54`: game step reads the float fps (original integer fps and scvtf when off)
+  - frame step `+0x2daa6c`: scvtf moved into the stub at the load
+  - frame step `+0x2db18c`: frame step from the host in whole vsyncs, by elapsed time until it has decided one (state page target fps; 0 = original interval logic)
+  - frame step `+0x3de5b8`: window crop 1920x1080 → the host's output size
+  - frame step `+0x3e562c`: game step reads the float fps (original integer fps and scvtf when off)
+  - frame step `+0x3e5638`: scvtf moved into the stub at the load
+  - frame step `+0x593110`: nn::ui2d::Pane::Calculate after the global matrix: duo_calc (the HUD at the taller screen's edges, below a camera housing's row)
+  - frame step `+0x6ee938`: 1280x720 default of an object (+0x1fc)
+  - frame step `+0x8c3fe8`: 1280x720 defaults of an object (eight slots)
+  - frame step `+0xbdb584`: display size 1920x1080 (window textures, frame buffer) → the host's output size
+  - frame step `+0xbdb6a0`: layout size 1280x720 → the host's layout height
+  - frame step `+0xbe14a8`: swapchain argument 1 when on (FPSLocker)
+  - frame step `+0xc02694`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
+  - frame step `+0xd4275c`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
+  - frame step `+0xd47068`: 1280x720 default of an object (+0x310)
+  - frame step `+0x27d53f8`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
+  - frame step `+0x27d5444`: PerspectiveProjection matrix: the HUD camera (16:9, near 1, far 10000) takes the screen's ratio and a widened vertical angle
+  - frame step `+0x2880b3c`: 1280x720 (int) in the UI system's setup
+  - frame step `+0x2880b40`: 1280.0, 720.0 in the UI system's setup
+  - frame step `+0x2880e34`: 1280x720 default of an object (+0x288)
+
+  </details>
+
+  - render scale stub (the launcher offers DM_RENDER_SCALE)
 - **function-matched frame step** (`main` of builds without FRAME_STEP): 60 fps frame step and render scale: a function of 0x298 bytes, `+0x18` in it; game step reader 1, a function of 0x358 bytes, `+0x34`, `+0x4c` in it; game step reader 2, a function of 0x81c bytes, `+0x4c`, `+0x58` in it; menu fade, a function of 0x3bc bytes, `+0x130` in it; swapchain argument, a function of 0x8bc bytes, `+0x1a4` in it; view render size, a function of 0x1f8 bytes, `+0x9c`, `+0x15c` in it
 
 ### Xenoblade Chronicles 3

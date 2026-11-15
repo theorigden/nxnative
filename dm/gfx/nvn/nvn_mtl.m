@@ -16074,12 +16074,13 @@ static id<MTLTexture> present_raw_src(id<MTLTexture> src) {
     return v;
 }
 // The rectangle of the canvas (dw x dh) the picture (pw x ph) is drawn into: the picture's aspect ratio kept and centred, black bars in the rest (no stretching when the screen's ratio
-// differs from the game's, e.g. iPhone about 19.5:9 against the game's 16:9); when the ratios differ by under 1 % (the remainder from a game width that is a multiple of 8 in the
-// full-screen setup, e.g. 1952x900 against 2868x1320 differs by 0.17 %) the whole canvas, leaving no border of a few pixels
+// differs from the game's, e.g. iPhone about 19.5:9 against the game's 16:9); when the ratios differ by under 2 % (the remainder from a game width that is a multiple of 8 in the
+// full-screen setup, e.g. 1952x900 against 2868x1320 differs by 0.17 %; a screen shape's height rounded to a multiple of 48, loader.c: a 3:2 screen's 1920x1296 differs by 1.3 %)
+// the whole canvas, leaving no border of a few pixels: the picture is stretched by at most about 1 % each way
 static MTLViewport present_viewport(double pw, double ph, double dw, double dh) {
     double s = fmin(dw / pw, dh / ph);
     MTLViewport vp = {floor((dw - pw * s) / 2), floor((dh - ph * s) / 2), round(pw * s), round(ph * s), 0, 1};
-    if (fabs((dw / dh) / (pw / ph) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
+    if (fabs((dw / dh) / (pw / ph) - 1) < 0.02) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
     return vp;
 }
 // The shape the picture is shown in, whatever part of the texture it comes from. The Switch's compositor stretches a buffer's crop to the layer, so a crop only picks texels: Super

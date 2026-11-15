@@ -338,6 +338,39 @@ static UILabel *front_ios_fps_label(void) {
     return l;
 }
 
+// Cloud saves' notice (save_sync.h front_save_sync_note): a rounded dark box at the top right, inside the safe area (clear of the Dynamic Island and the corners), for a
+// few seconds: an iCloud symbol and the text. A new notice replaces the one showing. Over the game, the pad and the progress screen; touches pass through it to the pad
+static UIView *g_note; static uint64_t g_note_gen;
+void front_save_sync_note(ss_note kind, const char *text, double seconds) {
+    if (!g_layer || !text) return;
+    NSString *t = @(text);
+    NSString *sym = kind == SS_NOTE_IN ? @"icloud.and.arrow.down" : kind == SS_NOTE_OUT ? @"icloud.and.arrow.up" : kind == SS_NOTE_WARN ? @"exclamationmark.icloud" : @"checkmark.icloud";
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIView *root = g_root.view; if (!root) return;
+        [g_note removeFromSuperview];
+        uint64_t gen = ++g_note_gen;
+        UILabel *label = [UILabel new]; label.text = t; label.numberOfLines = 2; label.textColor = UIColor.whiteColor;
+        label.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        CGSize ls = [label sizeThatFits:CGSizeMake(300, 200)]; ls.width = ceil(fmin(ls.width, 300)); ls.height = ceil(ls.height);
+        UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightMedium]]];
+        icon.tintColor = kind == SS_NOTE_WARN ? UIColor.systemYellowColor : UIColor.whiteColor; icon.contentMode = UIViewContentModeCenter;
+        const CGFloat pad = 10, iw = 22, gap = 8, margin = 12;
+        CGFloat w = pad + iw + gap + ls.width + pad, h = fmax(38, ls.height + 2 * pad);
+        UIEdgeInsets s = root.safeAreaInsets;
+        UIView *box = [[UIView alloc] initWithFrame:CGRectMake(root.bounds.size.width - s.right - margin - w, s.top + margin, w, h)];
+        box.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.85]; box.layer.cornerRadius = 10; box.userInteractionEnabled = NO;
+        box.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;   // stays at the top right as the view resizes
+        icon.frame = CGRectMake(pad, floor((h - iw) / 2), iw, iw); label.frame = CGRectMake(pad + iw + gap, floor((h - ls.height) / 2), ls.width, ls.height);
+        [box addSubview:icon]; [box addSubview:label];
+        box.alpha = 0; [root addSubview:box]; g_note = box;
+        [UIView animateWithDuration:0.25 animations:^{ box.alpha = 1; }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (gen != g_note_gen) return;   // replaced meanwhile
+            [UIView animateWithDuration:0.4 animations:^{ box.alpha = 0; } completion:^(BOOL done) { (void)done; if (gen == g_note_gen) { [box removeFromSuperview]; g_note = nil; } }];
+        });
+    });
+}
+
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's view and the pad, the title, a bar and a count, centered; UIKit views, so it draws while the game's thread waits
 static UIView *g_prog; static UILabel *g_prog_count; static UIProgressView *g_prog_bar; static UILabel *g_prog_title;
 void (*front_progress_hook)(const char *title, long done, long total);
@@ -361,6 +394,7 @@ void front_progress(const char *title, long done, long total) {
             g_prog_count.textColor = [UIColor colorWithWhite:0.72 alpha:1]; g_prog_count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
             [box addSubview:g_prog_title]; [box addSubview:g_prog_bar]; [box addSubview:g_prog_count]; [g_prog addSubview:box];
             [root addSubview:g_prog];
+            if (g_note) [root bringSubviewToFront:g_note];   // the cloud saves' notice stays over it
         }
         g_prog_title.text = tt; g_prog_bar.progress = total > 0 ? (float)done / (float)total : 0;
         g_prog_count.text = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
