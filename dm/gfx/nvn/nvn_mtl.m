@@ -15,6 +15,9 @@
 #include <fcntl.h>
 #include <sys/file.h>   // flock: the lock beside Metal's build folders (ga_claim)
 #include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <IOKit/IOKitLib.h>   // the GPU's core count (nvn_geometry.inc mesh_scratch)
+#endif
 #include <os/os_sync_wait_on_address.h>   // the uniform copy hand-off (nvn_rec.h ubc_wait)
 #if TARGET_OS_IPHONE
 #include <os/proc.h>   // os_proc_available_memory: for the memory readout line
@@ -163,6 +166,7 @@ static int g_cut_copy;                          // a buffer → texture copy was
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static _Atomic uint64_t g_done;                 // GPU complete and all CPU-visible effects through this fence published
+static _Atomic(uint32_t *) g_mesh_scr;         // the mesh scratch buffer's head words, once made (nvn_geometry.inc mesh_scratch): post_complete publishes g_done there
 static uint64_t g_arena_made;
 static uint64_t g_cm_mdraws;
 static uint64_t g_cm_enc, g_cm_enc0, g_cm_mdraws0, g_cm_hist[7], g_cm_big_enc, g_cm_big_draws, g_cm_big_z;   // per submission: encoders begun and Metal draws, by size, the largest (DM_NVN_ALLOCPROF=2)
@@ -2597,7 +2601,9 @@ static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
         if (start > now) start = now;
         post_run(r, f == fence && c1 ? c0 : seg_ts() ? start : 0, f == fence && c1 ? c1 : seg_ts() ? now : 0);
     }
-    pthread_mutex_lock(&g_mu); if (fence > g_done) g_done = fence; pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
+    pthread_mutex_lock(&g_mu); if (fence > g_done) g_done = fence;
+    uint32_t *scr = atomic_load(&g_mesh_scr); if (scr) __atomic_store_n(scr + DMSH_MESH_SCRATCH_DONE, (uint32_t)g_done, __ATOMIC_RELAXED);   // the slices of groups this fence cut off are free again
+    pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
     nvn_queue_gpu_progress();
 }
 static uint64_t g_sub_ready;   // mtl_sub_ready, for the submission being encoded
@@ -4972,7 +4978,7 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     pthread_mutex_lock(&g_res_mu); unsigned long nr = (unsigned long)g_res_objects.count; pthread_mutex_unlock(&g_res_mu);
     int live = 0, peak = 0, cap = 0; nvn_dirty_stat(&live, &peak, &cap);
     pthread_mutex_lock(&g_smu); own_stats os = own_stats_locked(); own_alias_stats as = own_alias_stats_locked(); unsigned ns = os.live, ashared = as.n, nghost = os.ghost, nwait = os.retire_wait; uint64_t ghost_puts = os.ghost_puts;
-    unsigned aorph = own_alias_unref_locked();   // shared textures no live texture object or finalized serial resolves to: kept only until their storage is taken over or their pool goes
+    own_alias_unheld au = own_alias_unheld_locked();   // shared textures nothing but the sharing table keeps: kept until their storage is taken over or their pool goes
     pthread_mutex_unlock(&g_smu);
     unsigned long dead_n = 0; unsigned long long dead_mb = 0;
     // Objects read from a weak table come back retained + autoreleased: the frame hook runs on a guest thread with no autorelease pool that drains, so without this wrapper every buffer counted would be pinned for good (the readout creating the leak itself)
@@ -4983,7 +4989,7 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
 #if TARGET_OS_IPHONE
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
-    MLOG("memory up to frame %llu: resident %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, serial objects %u, memory pools %d (resident %d; peak %d / tracking table capacity %d; freed but alive %lu, %llu MB), shared textures %u (%u of them unreferenced; evicted with pools %llu, on storage takeover %llu in total), texture re-uploads %llu in total, per-frame arena blocks created %llu in total, finalized textures still referenced %u (small table, %llu put in total), retired but held by a serial %u, recycled texture heaps made %llu, reused %llu, freed %llu, waiting %u (%llu MB); headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, ns, live, pres, peak, cap, dead_n, dead_mb, ashared, aorph, (unsigned long long)as.evicted, (unsigned long long)as.taken, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, nghost, (unsigned long long)ghost_puts, nwait,
+    MLOG("memory up to frame %llu: resident %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, serial objects %u, memory pools %d (resident %d; peak %d / tracking table capacity %d; freed but alive %lu, %llu MB), shared textures %u (%u kept by the sharing table alone, %llu MB, %llu MB of it drawn into or shader-written, the oldest idle %llu submissions; evicted with pools %llu, on storage takeover %llu in total), texture re-uploads %llu in total, per-frame arena blocks created %llu in total, finalized textures still referenced %u (small table, %llu put in total), retired but held by a serial %u, recycled texture heaps made %llu, reused %llu, freed %llu, waiting %u (%llu MB); headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, ns, live, pres, peak, cap, dead_n, dead_mb, ashared, au.entries, (unsigned long long)(au.bytes >> 20), (unsigned long long)(au.writable_bytes >> 20), (unsigned long long)au.oldest_idle, (unsigned long long)as.evicted, (unsigned long long)as.taken, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, nghost, (unsigned long long)ghost_puts, nwait,
          (unsigned long long)g_rh_made, (unsigned long long)g_rh_reused, (unsigned long long)g_rh_trimmed, rh_n, (unsigned long long)(rh_bytes >> 20), avail);
     { void mtl_vc_stats(unsigned *, uint64_t *, uint64_t *), mtl_tb2_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *, uint64_t *); uint64_t mtl_tex_mis_count(void); unsigned vn; uint64_t vh, vm, tb, tm, tf, tc, tcb;
       mtl_vc_stats(&vn, &vh, &vm); mtl_tb2_stats(&tb, &tm, &tf, &tc, &tcb);

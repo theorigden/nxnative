@@ -58,6 +58,18 @@ class Game:
     def pairs(self, key):   # "a=b c=d" → [(a, b), (c, d)]
         return [tuple(w.split('=', 1)) for w in self.words(key)]
 
+    def platform(self, name):
+        """The profile as one platform's host sees it: a row <key>@<platform> (PLATFORMS) stands for <key> there (Tears of the Kingdom's mem_reserve@ios and app_pool@ios: the Mac's larger
+        pool for 3D past 1600x1080, the 5 GB block proven on an 8 GB iPhone or iPad). The plain profile is the Mac's; its readers ignore the @ rows (values matches the whole key)"""
+        if name not in PLATFORMS: sys.exit(f'{self.id}: unknown platform {name}; one of {", ".join(PLATFORMS)}')
+        v = Game.__new__(Game); v.dir, v.id = self.dir, self.id
+        over = {k.split('@', 1)[0]: c for k, c in self.rows if k.endswith('@' + name)}
+        v.rows = [(k, over.get(k, c)) for k, c in self.rows if '@' not in k]
+        return v
+
+PLATFORMS = ('ios',)   # the platforms a profile row may name (<key>@ios); the C macro that tells them apart in game_profile.h
+PLATFORM_MACRO = {'ios': 'TARGET_OS_IPHONE'}
+
 
 def extra_dirs():   # profile folders outside the repository (DM_GAMES_DIR), searched after dm/games
     return [Path(p) for p in os.environ.get('DM_GAMES_DIR', '').split(':') if p]
@@ -121,8 +133,24 @@ def upscaler_keys(g):
 
 
 def header(g):
-    """game_profile.h of a profile: one profile's constants, or with the key programs (a multi-program application packed as one game: Super Mario 3D All-Stars) a table of its programs' profiles"""
-    return header_multi([(0, g)] + [(int(n), load(i)) for n, i in g.pairs('programs')]) if g.get('programs', '') else header_one(g)
+    """game_profile.h of a profile: one profile's constants, or with the key programs (a multi-program application packed as one game: Super Mario 3D All-Stars) a table of its programs' profiles.
+    Rows for one platform (<key>@ios, Game.platform) make the lines they change differ: those lines are written once per platform under #if TARGET_OS_IPHONE"""
+    def one(g): return header_multi([(0, g)] + [(int(n), load(i)) for n, i in g.pairs('programs')]) if g.get('programs', '') else header_one(g)
+    text = one(g)
+    for plat in PLATFORMS:
+        other = one(g.platform(plat))
+        if other == text: continue
+        a, b = text.split('\n'), other.split('\n')
+        if len(a) != len(b): sys.exit(f'{g.id}: rows for {plat} (@{plat}) change the header\'s shape; only values that keep it are supported')
+        out, i = [], 0
+        while i < len(a):
+            if a[i] == b[i]: out.append(a[i]); i += 1; continue
+            j = i
+            while j < len(a) and a[j] != b[j]: j += 1
+            out += [f'#if {PLATFORM_MACRO[plat]}', *b[i:j], '#else', *a[i:j], '#endif']; i = j
+        k = out.index('#pragma once') + 1
+        text = '\n'.join(out[:k] + ['#include <TargetConditionals.h>   // TARGET_OS_IPHONE: values for one platform (<key>@ios rows)'] + out[k:])
+    return text
 
 
 def header_multi(progs):

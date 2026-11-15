@@ -173,6 +173,7 @@ One row per profile; the notes are each profile's `README.md`.
 | [ROMANCE OF THE THREE KINGDOMS XIV: Diplomacy and Strategy Expansion Pack](0100ED7012DB2000/README.md) | `0100ED7012DB2000` | 1.0.10 | 10.4.1 | Koei Tecmo's KTGL | NVN |
 | [Sea of Stars](01008C0016544000/README.md) | `01008C0016544000` | 2.0.59001 | 16.2.0 | Unity 2021.3.25f1 IL2CPP | NVN |
 | [SHIN MEGAMI TENSEI V: Vengeance](010069C01AB82000/README.md) | `010069C01AB82000` | 1.0.3 | 15.3.2 | Unreal Engine 4.27 | NVN |
+| [Sid Meier's Civilization VII](0100C3601518C000/README.md) | `0100C3601518C000` | 1.5.0.1 (Mac; iOS address space open) | 19.3.11 | Firaxis, Coherent Gameface / V8, Wwise | NVN |
 | [Silver Pines](0100D5B026844000/README.md) | `0100D5B026844000` | 1.0.0 (base) | 21.4.7 | Unity 6000.3.15f1 IL2CPP | NVN |
 | [Sonic Frontiers Definitive Edition](0400921025B32000/README.md) | `0400921025B32000` | v65536 (Switch 2) | 21.4.1 (Ounce) | Hedgehog Engine 2, CRIWARE | NVN2 |
 | [Sonic Superstars](01008F701C074000/README.md) | `01008F701C074000` | 1.1.8 | 16.2.0 | Unity 2021.3.25f1 IL2CPP, CRIWARE, FMOD | NVN |
@@ -211,6 +212,7 @@ One row per profile; the notes are each profile's `README.md`.
 | [TUNIC](0100DA801624E000/README.md) | `0100DA801624E000` | 1.0.3 | 14.3.0 | Unity 2020.3.36f1 IL2CPP, FMOD | NVN |
 | [Unicorn Overlord](010069401ADB8000/README.md) | `010069401ADB8000` | 1.05 | 16.2.4 | Vanillaware's engine | NVN |
 | [Unicorn Overlord, Asian release](010054B01AD92000/README.md) | `010054B01AD92000` | 1.05 | 16.2.4 | Vanillaware's engine | NVN |
+| [Warhammer Survivors](0100CAA026246000/README.md) | `0100CAA026246000` | 1.0.0 (base) | 21.4.7 | Unity 6000.0.74f1 IL2CPP, FMOD | NVN |
 | [Well Dweller](0100217023F6C000/README.md) | `0100217023F6C000` | 1.0.0 | 22.2.0 | GameMaker Studio 2 (its runner) | OpenGL |
 | [Xenoblade Chronicles: Definitive Edition](0100FF500E34A000/README.md) | `0100FF500E34A000` | 1.1.2 | 9.3.1 | Monolith's engine | NVN |
 | [Xenoblade Chronicles 2](0100E95004038000/README.md) | `0100E95004038000` | 2.1.0 | 3.5.0 | Monolith's engine | NVN |
@@ -220,6 +222,8 @@ One row per profile; the notes are each profile's `README.md`.
 | [Yoshi's Crafted World](01006000040C2000/README.md) | `01006000040C2000` | 1.0.1 | 4.4.1 | Unreal Engine 4.18 era (Good-Feel) | NVN |
 
 ## Keys
+
+A row `<key>@ios` gives that key the value the iOS host is built with; the plain row is the Mac's (`game.py` `Game.platform`; `game_profile.h` writes the differing macros under `#if TARGET_OS_IPHONE`). Tears of the Kingdom's `mem_reserve@ios` and `app_pool@ios` keep the 5 GB block proven on 8 GB iPhones and iPads while the Mac's pool holds larger 3D views. The Python tools read the plain row.
 
 | Key | Meaning |
 |---|---|

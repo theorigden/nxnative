@@ -22,7 +22,7 @@ $(MSL_H): $(wildcard ../msl/*.metal) ../tools/host_msl.py host_msl_force
 	$(MAKE) -C ../../host host_msl GAME=$(GAME)
 .PHONY: host_msl_force
 host_msl_force:
-FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
+FW=-framework Metal -framework MetalFX -framework Foundation -framework IOKit -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
 # Host crash.c is linked in as well: the write-protect unit tests go through the same page-fault hook as production
 # Tests that #include nvn_mtl.m link the rest of the NVN layer beside it (hle_nvn.c: memory pools, sparse pools, serials) and the host's large stack, with weak stubs of what they need of the host (t_host_stubs.c)
 MTL_T_DEP=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
@@ -588,6 +588,9 @@ t_stencil_view: t_stencil_view.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_stencil_view.m $(MTL_T_SRC) $(FW)
 check_t_stencil_view: RUN_ENV = MTL_DEBUG_LAYER=1
 # The Vulkan layer (#included) over the whole NVN layer, whose device and present path it uses
+t_vk_fan: t_vk_fan.m ../vk/hle_vk.m $(MTL_T_DEP)
+	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_fan.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
+check_t_vk_fan: RUN_ENV = MTL_DEBUG_LAYER=1
 t_vk_desc: t_vk_desc.m ../vk/hle_vk.m $(MTL_T_DEP)
 	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_desc.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
 t_gl_imports: t_gl_imports.m ../gl/hle_gl.m ../../host/hle.c ../../host/hle.h $(MTL_T_DEP)

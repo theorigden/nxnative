@@ -4,14 +4,16 @@
 // its children's are, so what it does to a pane's matrix its children and text follow; and from Pane::CalculateGlobalMatrix (main+0x10d8130, the game's pass over whole
 // layouts before Calculate, which clears the dirty bit, so a pane it reaches first is not computed again in Calculate) after its call. The library recomputes a global
 // matrix only when the pane or a parent changed, so a shift is added once per computation:
-// - a full-screen background (a leaf that draws, as wide and as tall as its layout, centred) is stretched to the taller screen;
+// - a full-screen background (a leaf that draws, as wide and as tall as its layout, centred) is stretched to the taller screen, or to the wider one (st[7]);
 // - a widget at the layout's top or bottom edge moves out by the extra half-height with everything in it, so it sits at the screen's edge again; at the top it stops
 //   short of a camera housing's row by the HUD's top inset (state +0x64, written by the Mac front end while the picture fills that row), so the HUD stays below it.
-// Layouts placed by their root (markers over characters, set at a point of the 3D scene) are left alone.
+// Layouts placed by their root (markers over characters, set at a point of the 3D scene) are left alone. On a screen wider than 16:9 (st[0] = 0, st[7] > 1) only the
+// full-screen backgrounds change: the HUD's projection is centred on the 16:9 middle (patches.py), and the widgets stay there, inside an iPhone's safe area.
 // What draws is told by the vtable's DrawSelf (slot 28), which null panes, alignments, captures and parts keep from nn::ui2d::Pane (main+0x10d7f98, an empty function;
 // fn_null_draw is its address).
 // st: the parameters (state page + 0x80), in 720 units: st[0] the shift (layout half-height - 360; 0 = off), st[1] the vertical stretch (layout height / 720), st[2] the
-// edge rule's distance (DM_SCREEN_HUD), st[3] unused here, st[4] / st[5] a full-screen pane's width / height, st[6] the tallest pane still stretched; st[-7] (state +0x64)
+// edge rule's distance (DM_SCREEN_HUD), st[3] unused here, st[4] / st[5] a full-screen pane's width / height, st[6] the tallest pane still stretched, st[7] the
+// horizontal stretch (layout width / 1280; 1 = none); st[-7] (state +0x64)
 // the top inset in layout units. Compiled to position-independent code with no data (constants are immediates)
 static inline float fab(float x) { return x < 0 ? -x : x; }
 static inline float f(const char *p, int off) { return *(const float *)(p + off); }
@@ -26,7 +28,7 @@ static inline int container(const char *p, const void *fn_null_draw, const float
 }
 
 void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
-    if (st[0] == 0) return;
+    if (st[0] == 0 && !(st[7] > 1)) return;
     const char *pp = parent(pane);
     if (!pp) return;   // a layout's root
     // The layout's space: 1920x1080 or 1280x720 (the root pane's size); the parameters are in 720 units
@@ -37,9 +39,13 @@ void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
     float gw = fab(f(pane, 0x50) * g[0]), gh = fab(f(pane, 0x54) * g[5]);
     int leaf = *(char *const *)(pane + 0x28) == pane + 0x20;   // the child list empty: a stretch would carry over to children (a menu page's whole content)
     if (gw >= st[4] * u && gh >= st[5] * u && gh <= st[6] * u && fab(g[3]) < 40 * u && fab(g[7]) < 40 * u) {
-        if (leaf && draws(pane, fn_null_draw)) { g[4] *= st[1]; g[5] *= st[1]; g[6] *= st[1]; g[7] *= st[1]; }
+        if (leaf && draws(pane, fn_null_draw)) {
+            g[4] *= st[1]; g[5] *= st[1]; g[6] *= st[1]; g[7] *= st[1];
+            if (st[7] > 1) { g[0] *= st[7]; g[1] *= st[7]; g[2] *= st[7]; g[3] *= st[7]; }
+        }
         return;
     }
+    if (st[0] == 0) return;   // wider, not taller: nothing moves
     // a background as tall as the layout but not as wide, centred up and down: stretched the same way
     if (leaf && gh >= st[5] * u && gh < 720 * u * st[1] - 2 && fab(g[7]) < 40 * u && draws(pane, fn_null_draw)) {
         g[4] *= st[1]; g[5] *= st[1]; g[6] *= st[1]; g[7] *= st[1];
