@@ -34,6 +34,8 @@ static void merge_rumble_to(void (*sink)(const dm_haptic_state *));
 #include "home_quit_mac.h"
 #include "save_sync.h"
 #include "ctrl_prompt.h"
+#include "button_icons.h"
+#include <stdatomic.h>
 #include <signal.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -322,8 +324,37 @@ static int merge_pads_left(GCController *gone) {
     for (GCController *c in GCController.controllers) if (c.extendedGamepad && c != gone) return 1;
     return 0;
 }
+// The kind of controller the player uses, for the button icons (front_pad_kind, front.h; button_icons.h): player 1's controller, else the first one connected, as pads_changed last saw them.
+// GameController's Xbox and PlayStation profiles (GCXboxGamepad, GCDualSenseGamepad, GCDualShockGamepad), else the product category; a raw HID, Joy-Con or Switch 2 pad is another kind
+static _Atomic int g_pad_kind = PAD_KIND_NONE;
+static _Atomic uint64_t g_pad_watch_ns;   // when pads_start began watching (0: not yet)
+static int pad_kind_of(GCController *c) {
+    GCExtendedGamepad *g = c.extendedGamepad; NSString *k = c.productCategory ?: @"";
+    if ([g isKindOfClass:GCXboxGamepad.class] || [k containsString:@"Xbox"]) return PAD_KIND_XBOX;
+    if ([g isKindOfClass:GCDualSenseGamepad.class] || [g isKindOfClass:GCDualShockGamepad.class] || [k containsString:@"DualSense"] || [k containsString:@"DualShock"]) return PAD_KIND_PLAYSTATION;
+    return PAD_KIND_OTHER;
+}
+static void pad_kind_update(GCController *gone) {
+    int k = PAD_KIND_NONE; const char *name = NULL;
+    if (!g_merge && g_held[0] && g_held[0] != gone) { k = pad_kind_of(g_held[0]); name = pad_name(g_held[0]); }
+    else for (GCController *c in GCController.controllers) if (c != gone && c.extendedGamepad) { k = pad_kind_of(c); name = pad_name(c); break; }
+    if (k == PAD_KIND_NONE && (g_hidpads || g_jc1_pads || dm_switch2_pads())) k = PAD_KIND_OTHER;
+    if (atomic_exchange(&g_pad_kind, k) != k && k != PAD_KIND_NONE) LOG("front end: player 1's controller for the button icons: %s (%s)", name ?: "a Nintendo pad", k == PAD_KIND_XBOX ? "Xbox" : k == PAD_KIND_PLAYSTATION ? "PlayStation" : "another kind");
+}
+int front_pad_kind(void) {
+    if (!getenv("DM_WINDOW")) return PAD_KIND_NONE;   // no window: no controllers are read
+    int k = atomic_load(&g_pad_kind); uint64_t t0 = atomic_load(&g_pad_watch_ns);
+    if (k != PAD_KIND_NONE) return k;
+    // GameController tells of a controller connected at start shortly after the app starts watching: until 1.5 s after that, none may still be one coming
+    return !t0 || clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0 < 1500000000ull ? PAD_KIND_LOOKING : PAD_KIND_NONE;
+}
+static void pads_changed_body(GCController *gone);
 // Called at start and on every connect / disconnect (gone: the controller that was just removed, nil on a connect)
 static void pads_changed(GCController *gone) {
+    pads_changed_body(gone);
+    pad_kind_update(gone);
+}
+static void pads_changed_body(GCController *gone) {
     if (g_merge) {
         int any = 0;
         for (GCController *c in GCController.controllers) if (jc1_gc_unread(c)) pad_keep_system_buttons(c);   // read from HID (pad_jc1_mac.h), a lone Joy-Con's too (no extended gamepad profile)
@@ -710,6 +741,7 @@ int front_ctrl_support(int min, int max) {
     return g_cp_ok;
 }
 static void pads_start(void) {
+    atomic_store(&g_pad_watch_ns, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
     e = getenv("DM_KBD_PLAYER"); g_kbd_own = !g_merge && e && !strcmp(e, "own");
     e = getenv("DM_PAD_PRESS_TO_JOIN"); g_press_to_join = !g_merge && e && atoi(e);

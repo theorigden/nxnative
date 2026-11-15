@@ -24,6 +24,9 @@ shader_versions	v720896
 modules	main subsdk0 sdk
 romfs_marker	Pack/ZsDic.pack.zs
 zip_store	.zs:.bwav:.mc:.webm:.metallib
+# The HUD's and menus' button prompts are glyphs of the game's own font "External" (E040 A ... E04C minus, E05E / E05F the sticks), not the system's extension font, which the game never loads.
+# The glyphs that differ on an Xbox or PlayStation controller are redrawn in its style (dm/tools/game_icon_font.py; DM_BUTTON_ICONS); the D-pad, stick and other icons stay the game's
+icon_font	Font/Font.Nin_NX_NVN.bfarc.zs:scft/External.bfotf	E040=A E041=B E042=X E043=Y E044=L E045=R E046=ZL E047=ZR E04B=Plus E04C=Minus
 
 # ---- Memory ----
 # The NPDM declares 24 MB of system resource, so IsVirtualAddressMemoryEnabled is true and the game's memory lives in the alias region (as Engage's, see 0100A6301214E000/game.tsv).

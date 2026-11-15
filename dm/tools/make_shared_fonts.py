@@ -65,7 +65,7 @@ def build(out_dir, src=SOURCE, letters=LETTERS):
         print('%s: type %d, %d characters, %d glyphs, %d bytes' % (fn, t, chars, glyphs, os.path.getsize(os.path.join(out_dir, fn))))
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import make_ext_font
-    make_ext_font.build(os.path.join(out_dir, EXT), letters)
+    make_ext_font.build_all(os.path.join(out_dir, EXT), letters)   # the Switch's icons and every other style (nintendo_ext_<variant>.ttf)
 
 if __name__ == '__main__':
     if len(sys.argv) < 2: sys.exit(__doc__ or 'usage: make_shared_fonts.py out_dir [source.ttf]')

@@ -298,6 +298,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Press a button to join | `DM_PAD_PRESS_TO_JOIN` | `1`, `0` |
 | Controller buttons | `DM_PAD_FACE` | `position` as on a Switch, `label` as printed |
+| Button icons (Mac) | `DM_BUTTON_ICONS` | `auto` the icons of the controller connected at start (Xbox, PlayStation, else the Switch's), `switch`, `xbox`, `playstation` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Game's upscaler | `DM_UPSCALER` | `game`, `metalfx` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |

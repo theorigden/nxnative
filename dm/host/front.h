@@ -49,6 +49,12 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
 // prompt over the game while controllers join and the calling thread blocks until it closes. 1: done (A or Return with the minimum in, the maximum in, or nobody left to join);
 // 0: closed (B, Escape); -1 with no window: nothing shown, the caller answers as the player closing it
 int front_ctrl_support(int min, int max);
+// The kind of controller the player uses, for the button icons the game shows (DM_BUTTON_ICONS=auto; button_icons.h, hle_sdk16.c): PAD_KIND_XBOX, PAD_KIND_PLAYSTATION, PAD_KIND_OTHER (a Nintendo pad
+// or any other), PAD_KIND_NONE with no controller, PAD_KIND_LOOKING while the front end may still be told of controllers connected at start (the caller waits a little). Player 1's controller,
+// else the first connected. Any thread (Mac front_mac.m; the iOS front end has none yet: a weak default answers none)
+int front_pad_kind(void);
+// The button-icon fonts' variant the host serves (hle_sdk16.c, button_icons.h; decided at the first call): NULL for the Switch's own icons, else xbox, xbox_label, playstation or playstation_label
+const char *dm_button_icons_variant(void);
 
 // Early start of host loading (main.c): reading the NSO / relocation / forced takeover / prefetch start are moved to a background thread, in parallel with the front end (UIKit launch chain, Metal view);
 // the dm_main / main called afterwards waits for it to finish. For call timing and preconditions see the comments in main.c (set DM_ROMFS and the other environment variables and the cwd first; arguments identical item by item to those of the later main).

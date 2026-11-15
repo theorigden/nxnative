@@ -1,6 +1,8 @@
 // System service interfaces used by games on newer SDKs (16.x): oe / time / pl (shared font) / vi vsync / diag.
 // On the real device all of these go through Horizon system services (IPC); the host gives values directly or makes them "unavailable".
 #include "hle.h"
+#include "button_icons.h"
+#include "front.h"
 #include <fcntl.h>
 #include <pthread.h>
 #include <pthread/qos.h>
@@ -82,13 +84,41 @@ static font_t font_open(const char *path, const char *file) {   // path (an over
     if (f.p) LOG("shared font (%s): %s (%zu bytes, BFTTF 'decrypted' header + TTF as is)", file ? file : "fallback", path, f.n - 8);
     return f;
 }
+// Button icons of the player's controller (button_icons.h): the variant of the fonts the host serves, decided once, at the first font a game asks for. auto waits for the front end to finish
+// looking for controllers (front_pad_kind PAD_KIND_LOOKING, at most 3 s after it starts) so a controller connected at start counts
+__attribute__((weak)) int front_pad_kind(void) { return PAD_KIND_NONE; }   // front.h; front_mac.m has it, the iOS front end not yet (auto: the Switch's icons)
+static const char *g_icons_variant;
+static void icons_decide(void) {
+    const char *set = getenv("DM_BUTTON_ICONS"), *face = getenv("DM_PAD_FACE");
+    int kind = PAD_KIND_NONE, by_label = face && !strcmp(face, "label");
+    if (!set || !*set || !strcmp(set, "auto")) {
+        kind = front_pad_kind();
+        for (int ms = 0; kind == PAD_KIND_LOOKING && ms < 3000; ms += 50) { usleep(50000); kind = front_pad_kind(); }
+    }
+    int style = bi_style(set, kind);
+    g_icons_variant = bi_variant(style, by_label);
+    static const char *const kinds[] = {"none", "another kind", "Xbox", "PlayStation"};
+    LOG("button icons: %s (DM_BUTTON_ICONS=%s%s%s)%s", style == BI_XBOX ? "Xbox" : style == BI_PLAYSTATION ? "PlayStation" : "Switch", set && *set ? set : "auto",
+        set && *set && strcmp(set, "auto") ? "" : ", controller at start: ", set && *set && strcmp(set, "auto") ? "" : kind == PAD_KIND_LOOKING ? "still looking" : kinds[kind + 1],
+        g_icons_variant ? by_label ? ", the bottom button as A (DM_PAD_FACE=label)" : ", the right button as A (DM_PAD_FACE=position)" : "");
+}
+const char *dm_button_icons_variant(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, icons_decide);
+    return g_icons_variant;
+}
 static pthread_mutex_t font_mu = PTHREAD_MUTEX_INITIALIZER;
 #define FONT_TYPES 6
 static const char *const font_file[FONT_TYPES] = {"standard.ttf", "chinese_simplified.ttf", "chinese_simplified_ext.ttf", "chinese_traditional.ttf", "korean.ttf", "nintendo_ext.ttf"};
 static font_t font_by_type[FONT_TYPES];   // what each type is served: its own file, or the standard font's mapping
 static font_t font_open_type(int type) {   // font_mu held; an empty font_t: the type takes the standard font
     if (type == 5) {
-        font_t f = font_open(getenv("DM_SHARED_FONT_EXT"), font_file[5]);
+        const char *over = getenv("DM_SHARED_FONT_EXT"), *v = dm_button_icons_variant(); font_t f = {0};
+        if (v && !(over && *over)) {   // the icons in the player's controller's style (make_ext_font.py writes nintendo_ext_<variant>.ttf beside nintendo_ext.ttf)
+            char file[64]; bi_file(file, sizeof file, font_file[5], v);
+            if (!(f = font_open(NULL, file)).p) LOG("[YELLOW] %s missing from DM_FONT_DIR (dm/tools/make_shared_fonts.py makes it): the Switch's button icons", file);
+        }
+        if (!f.p) f = font_open(over, font_file[5]);
         if (!f.p) LOG("[YELLOW] Nintendo extended shared font missing (dm/tools/make_shared_fonts.py makes nintendo_ext.ttf): button icons will be drawn as '?'");
         return f;
     }
@@ -126,9 +156,34 @@ static void font_load_init(void) {
     font_load = guest_sym("_ZN2nn6fontll18ScalableFontEngine8LoadFontEPcPKvjj");
     if (!font_load) die("ScalableFontEngine::LoadFont not found in the guest");
 }
-HLE_FORCE("_ZN2nn6fontll18ScalableFontEngine8LoadFontEPcPKvjj", "shared font BFTTF allocation base → TTF payload; parsing and errors stay in the SDK", uint32_t, h_font_LoadFont, void *self, char *name, const void *data, unsigned index, unsigned capacity) {
+// A game's own button-icon font in the player's controller's style (button_icons.h; the profile's icon_font, dm/tools/game_icon_font.py): a font the game loads whose full name has a
+// restyled copy in DM_FONT_DIR (game_<name>_<variant>.ttf) is loaded from that copy instead, the same font with the button glyphs redrawn (Tears of the Kingdom's "External").
+// The copy is mapped once per name and kept, as the engine reads the font while it draws. The host's own shared fonts and a game without such a copy load as they are
+#define ICON_SWAPS 64   // every font a game loads has an entry (Tears of the Kingdom: 10), the ones without a copy too
+static struct { char name[64]; const void *p; } g_icon_swap[ICON_SWAPS]; static int g_icon_swaps;
+static const void *icon_font_swap(const void *data) {
+    const char *v = dm_button_icons_variant(), *dir = getenv("DM_FONT_DIR");
+    char name[64];
+    if (!v || !dir || !*dir || !bi_font_name(data, 64u << 20, name, sizeof name)) return data;   // a font's tables lie within it; 64 MB only bounds a corrupt directory
+    const void *r = data; int own = 0;
+    pthread_mutex_lock(&font_mu);
+    for (int t = 0; t < FONT_TYPES; t++) if (font_by_type[t].p && data == font_by_type[t].p + 8) own = 1;   // one of the host's shared fonts
+    int i = 0;
+    while (!own && i < g_icon_swaps && strcmp(g_icon_swap[i].name, name)) i++;
+    if (!own && i == g_icon_swaps && i < ICON_SWAPS) {
+        char base[128], file[160], path[1024];
+        snprintf(base, sizeof base, "game_%s.ttf", name); bi_file(file, sizeof file, base, v); snprintf(path, sizeof path, "%s/%s", dir, file);
+        font_t f = access(path, R_OK) ? (font_t){0} : font_map(path);
+        snprintf(g_icon_swap[i].name, sizeof g_icon_swap[i].name, "%s", name); g_icon_swap[i].p = f.p ? f.p + 8 : NULL; g_icon_swaps++;
+        if (f.p) LOG("button icons: the game's font %s is loaded from %s (%zu bytes)", name, path, f.n - 8);
+    }
+    if (!own && i < g_icon_swaps && g_icon_swap[i].p) r = g_icon_swap[i].p;
+    pthread_mutex_unlock(&font_mu);
+    return r;
+}
+HLE_FORCE("_ZN2nn6fontll18ScalableFontEngine8LoadFontEPcPKvjj", "shared font BFTTF allocation base → TTF payload; a game's icon font → its restyled copy; parsing and errors stay in the SDK", uint32_t, h_font_LoadFont, void *self, char *name, const void *data, unsigned index, unsigned capacity) {
     pthread_once(&font_load_once, font_load_init);
-    return font_load(self, name, font_payload(data), index, capacity);
+    return font_load(self, name, icon_font_swap(font_payload(data)), index, capacity);
 }
 // The address points straight at the TTF (past the 8-byte header) and the size excludes the header, except for a game on SDK 11 or later whose main imports ScalableFontEngineHelper::Decode
 //   (dm_sdk_major, dm_game_imports; the profile's shared_font overrides). Super Mario 3D World + Bowser's Fury (SDK 10) records shared fonts as type 0 (main+0x975658), calls no Decode and hands the address
