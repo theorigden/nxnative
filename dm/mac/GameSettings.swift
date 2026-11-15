@@ -133,6 +133,7 @@ final class GameSettings {
     // DM_CTL "menushot <path>": the window as drawn now, as a PNG (a check of its look without a screen capture)
     func snapshot(_ path: String) -> Bool {
         guard let v = view, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { log("[RED] menushot: the window is not open"); return false }
+        v.layoutSubtreeIfNeeded(); v.displayIfNeeded()   // what SwiftUI changed since the window last drew (a covered window draws rarely)
         v.cacheDisplay(in: v.bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: URL(fileURLWithPath: path))) != nil else { log("[RED] menushot: cannot write \(path)"); return false }
         log("menushot \(path)")
