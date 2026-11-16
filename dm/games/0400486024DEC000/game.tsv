@@ -21,6 +21,9 @@ shader_versions	v131072
 modules	main subsdk0 sdk
 romfs_marker	Pack/ZsDic.pack.zs
 zip_store	.zs:.bwav:.webm:.metallib
+# The button prompts are glyphs of the game's own font "External" (Font2/Font.Product.100 › External_00.buif names it; the loose Font2/Scalable file), the same layout as Tears of the Kingdom's
+# (E040 A ... E04C minus). The glyphs that differ on an Xbox or PlayStation controller are redrawn in its style (dm/tools/game_icon_font.py; DM_BUTTON_ICONS)
+icon_font	Font2/Scalable/External.Nin_Ounce_NVN2.bfotf.zs	E040=A E041=B E042=X E043=Y E044=L E045=R E046=ZL E047=ZR E04B=Plus E04C=Minus
 
 # ---- Memory ----
 # The Switch 2 leaves games 9 GB of its 12 GB (Donkey Kong Bananza's figure). The NPDM declares 48 MB of system resource, so virtual address memory is on.
