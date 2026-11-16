@@ -33,7 +33,7 @@ static id<MTLLibrary> tm_host_lib(NSDictionary *j) {
     static const char *want[] = {"c1", "cbuf", "tex", "samp_tex", "tex", "samp_tex", "samp_tex", "samp_tex", "border"};
     NSArray *b = j[@"bindings"]; int ok = [b isKindOfClass:NSArray.class] && b.count == 9 && [j[@"entry"] isEqual:@"main0"];
     for (NSUInteger i = 0; ok && i < 9; i++) ok = [b[i][@"arg_id"] intValue] == (int)i && [b[i][@"kind"] isEqual:@(want[i])];
-    if (!ok) { RED_ONCE(173, "tone map: shader %s does not have agl's tone map interface (two textures, uniform buffer 0): the game's shader draws it", [j[@"key"] UTF8String]); return nil; }
+    if (!ok) { RED_ONCE(175, "tone map: shader %s does not have agl's tone map interface (two textures, uniform buffer 0): the game's shader draws it", [j[@"key"] UTF8String]); return nil; }
     NSError *e = nil; id<MTLLibrary> lib = host_lib("tonemap_agl", &e);
     if (!lib) MLOG("[RED] tone map: the host's library did not load (%s): the game's shader draws it", e.localizedDescription.UTF8String);
     return lib;
@@ -136,7 +136,7 @@ static void hdr_final_copy(const tex_t *rt) {
     int tid = (int)(tex_slot_h(S.tex[1], S.img[1], 0) & 0xfffff);
     os_unfair_lock_lock(&g_rmu); id<MTLTexture> f = tid ? tex_by_id(tid) : nil; os_unfair_lock_unlock(&g_rmu);
     if (!f || !pf_float(f.pixelFormat) || f.textureType != MTLTextureType2D || f.width != rt->d.width || f.height != rt->d.height) {
-        RED_ONCE(174, "HDR: the final copy into window texture %llu reads no 2D float picture of its size (format %lu, %lux%lu): the window texture is presented",
+        RED_ONCE(176, "HDR: the final copy into window texture %llu reads no 2D float picture of its size (format %lu, %lux%lu): the window texture is presented",
                  (unsigned long long)w, (unsigned long)f.pixelFormat, (unsigned long)f.width, (unsigned long)f.height);
         return; }
     int k = 0;
@@ -149,7 +149,7 @@ found:
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:f.pixelFormat width:f.width height:f.height mipmapped:NO];
         d.storageMode = MTLStorageModePrivate; d.usage = MTLTextureUsageShaderRead;
         id<MTLTexture> h = [g_dev newTextureWithDescriptor:d]; h.label = @"HDR final image";
-        if (!h) { RED_ONCE(175, "HDR: no texture for the final image's copy"); g_hfin[k].h = nil; g_hfin[k].ser = 0; g_hfin[k].win = 0; g_hfin[k].armed = 0; return; }
+        if (!h) { RED_ONCE(177, "HDR: no texture for the final image's copy"); g_hfin[k].h = nil; g_hfin[k].ser = 0; g_hfin[k].win = 0; g_hfin[k].armed = 0; return; }
         g_hfin[k].h = h; g_hfin[k].ser = mtl_ext_tex((__bridge void *)h); g_hfin[k].armed = 0;
         MLOG("HDR: the final image (%lux%lu, format %lu) is copied beside window texture %llu and presented from there", (unsigned long)f.width, (unsigned long)f.height, (unsigned long)f.pixelFormat, (unsigned long long)w);
     }
