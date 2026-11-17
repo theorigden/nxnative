@@ -106,7 +106,7 @@ Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizo
 
 ### Resolution
 
-Games whose profile supports it (Tears of the Kingdom). **Screen's native**, the default, renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)** renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate.
+Games whose profile supports it (Tears of the Kingdom). **Screen's native**, the Mac's default, renders the picture at the screen's own pixel size: 3456x2234 on a 16-inch MacBook Pro, 3840x2160 on a 4K TV, the screen the game opens on. **1080p (Switch)** renders the docked Switch's 1920 wide and lets the screen scale it up. Native is much sharper and much more work for the GPU; lower [Render scale](#render-scale) to keep the frame rate. On the iPhone and iPad the default is **1080p (Switch)**: Render scale only shrinks the 3D views, and TotK's passes after them (its effects, anti-aliasing, the upscaler, the HUD) run at the output size, so an iPad Pro M1 at native (2388x1668) took 31-33 ms of GPU a frame even at a render scale of 0.70.
 
 ### Frame-rate counter
 
