@@ -93,6 +93,7 @@ schemes:
         DmIOS: all
     run:
       config: Release
+      debugEnabled: false   # the host takes write-protection faults on purpose (texture writes, nvn_dirty.c); an attached debugger stops at the first EXC_BAD_ACCESS and the game sits on a black screen
     profile:
       config: Release
     archive:
