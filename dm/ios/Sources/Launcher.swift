@@ -2,12 +2,18 @@
 // from dm/games/settings.tsv (dm/games/settings.py): each sets an environment variable the host reads when the game starts. A variable an env file set (Documents/env.txt, the bundle's
 // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section (rows: LauncherRow.swift). Choices that differ from the game's default are kept
 // in UserDefaults; Reset to tested defaults shows the defaults, and Play then forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once with the saved choices; DM_SAVED_CHOICES=0 ignores them (and keeps them)
+// Start straight into the game (quickStartKey, also in the in-game menu): a short screen with the game's name instead (QuickStartView); a tap, or a controller's Menu or Options
+// button, shows this screen, otherwise the game starts with the saved choices after the same cloud save check Play makes
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import GameController
 import os
 
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
+
+/// Start straight into the game (UserDefaults, off by default): the launcher's short screen instead of the settings (QuickStartView)
+let quickStartKey = "launcher.quickStart"
 
 
 /// Cloud saves: an iCloud Drive folder shared with the Mac app (chosen in its settings window's
@@ -100,6 +106,7 @@ private struct LauncherView: View {
     @State private var check = 0   // which Play the running check is for: one the player went on from without it is dropped
     @State private var report: SaveSyncReport?
     @State private var asking: SaveSyncReport.Step?
+    @AppStorage(quickStartKey) private var quickStart = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -132,6 +139,11 @@ private struct LauncherView: View {
                             .disabled(!m.changed)
                     } footer: {
                         Text("Brings back all settings this game was tested with.")
+                    }
+                    Section {
+                        Toggle("Start straight into the game", isOn: $quickStart)
+                    } footer: {
+                        Text("Opens the game after a short screen. Tap the screen or press Menu on a controller there to see these settings.")
                     }
                     CloudSavesSection()
                     Section {
@@ -201,7 +213,7 @@ private struct LauncherView: View {
     }
 
     /// Blocks while the cloud's file downloads (SaveSyncReport.waitMs at most). nil: no report (the host then decides as it always did)
-    private static func compare() -> SaveSyncReport? {
+    nonisolated fileprivate static func compare() -> SaveSyncReport? {
         // getenv, not ProcessInfo.environment: main.m sets DM_SAVE and applies env.txt after that snapshot
         guard let save = getenv("DM_SAVE") else { fputs("launcher: save sync: no DM_SAVE\n", stderr); return nil }
         var buf = [CChar](repeating: 0, count: 1024)
@@ -220,11 +232,77 @@ private struct LauncherView: View {
         play()
     }
 
-    private func appIcon() -> UIImage? {
+    private func appIcon() -> UIImage? { launcherAppIcon() }
+}
+
+fileprivate func launcherAppIcon() -> UIImage? {
         if let i = UIImage(named: "AppIcon") { return i }
         guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
               let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
         return UIImage(named: last)
+}
+
+/// Start straight into the game: the game's name for about 2 s while the cloud save is compared, then the game; a tap, or Menu / Options on a controller, shows the settings
+/// screen instead (LauncherView, where Play asks what it asks). A cloud save that needs a choice shows the settings screen too, so the question is asked there
+private struct QuickStartView: View {
+    @ObservedObject var m: LauncherModel
+    let play: () -> Void
+    @State private var settings = false
+
+    var body: some View {
+        if settings {
+            LauncherView(m: m, play: play)
+        } else {
+            VStack(spacing: 16) {
+                if let icon = launcherAppIcon() {
+                    Image(uiImage: icon).resizable().frame(width: 96, height: 96)
+                        .clipShape(RoundedRectangle(cornerRadius: 22))
+                        .accessibilityHidden(true)
+                }
+                Text((info("CFBundleDisplayName") as? String) ?? "Game").font(.title.weight(.bold)).multilineTextAlignment(.center)
+                ProgressView()
+                Text("Tap the screen or press Menu for settings").font(.callout).foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { show("tap") }
+            .preferredColorScheme(.dark)
+            .task { await run() }
+        }
+    }
+
+    private func show(_ why: String) {
+        guard !settings else { return }
+        fputs("launcher: quick start: settings screen (\(why))\n", stderr)
+        settings = true
+    }
+
+    private static func menuPressed() -> Bool {
+        GCController.controllers().contains { c in
+            (c.extendedGamepad?.buttonMenu.isPressed ?? false) || (c.extendedGamepad?.buttonOptions?.isPressed ?? false) || (c.microGamepad?.buttonMenu.isPressed ?? false)
+        }
+    }
+
+    private func run() async {
+        fputs("launcher: quick start (Start straight into the game)\n", stderr)
+        dm_cloud_saves_env()   // DM_SAVE_SYNC from the picked folder, as Play sets it
+        let check = Task.detached(priority: .userInitiated) { LauncherView.compare() }
+        let end = Date().addingTimeInterval(2)
+        while Date() < end {
+            if Task.isCancelled || settings { return }
+            if Self.menuPressed() { show("controller Menu"); return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let r = await check.value
+        guard !settings, !Task.isCancelled else { return }
+        switch SaveSyncReport.step(r) {
+        case .play(let choice):
+            if let choice { setenv("DM_SAVE_SYNC_CHOICE", choice, 1); fputs("launcher: DM_SAVE_SYNC_CHOICE=\(choice)\n", stderr) }
+            play()
+        default:
+            show("the cloud save needs a choice")
+        }
     }
 }
 
@@ -240,16 +318,17 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); model.applySaved(); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     var host: UIViewController?
-    let view = LauncherView(m: model) {
+    let play = {
         guard let h = host else { return }
         host = nil
         model.apply()
         h.dismiss(animated: false) { done() }
     }
-    let h = DmHostingController(rootView: view)
+    let quick = UserDefaults.standard.bool(forKey: quickStartKey)
+    let h: UIViewController = quick ? DmHostingController(rootView: QuickStartView(m: model, play: play)) : DmHostingController(rootView: LauncherView(m: model, play: play))
     h.modalPresentationStyle = .fullScreen
     host = h
     parent.present(h, animated: false)
-    fputs("launcher: \(file.settings.count) settings shown\n", stderr)
+    fputs(quick ? "launcher: quick start screen\n" : "launcher: \(file.settings.count) settings shown\n", stderr)
     return true
 }

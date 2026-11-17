@@ -31,6 +31,12 @@ private func gameMenuItems() -> [UIMenuElement] {
         }
     }
     if !placed { items.insert(UIMenu(options: .displayInline, children: [layout]), at: 0) }
+    if gameMenuModel != nil {   // the start screen's own choice (Launcher.swift quickStartKey): off brings the settings screen back at the next launch
+        let quick = UserDefaults.standard.bool(forKey: quickStartKey)
+        items.append(UIMenu(options: .displayInline, children: [UIAction(title: "Start straight into the game", attributes: .keepsMenuPresented, state: quick ? .on : .off) { _ in
+            UserDefaults.standard.set(!quick, forKey: quickStartKey)
+        }]))
+    }
     return items
 }
 
