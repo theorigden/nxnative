@@ -70,6 +70,33 @@ def dynamic_resolution(ctx):
     for w in drs_controller: emit(w)
     fs_put(site, [B(site, start)], 'dynamic resolution level: 0 (full resolution), or with state +0x40 (DM_DYNAMIC_RESOLUTION) a climb on the load measured at each level')
     ctx.capabilities.add('DYNAMIC_RESOLUTION')
+    render_scale(ctx)
+
+# Render scale (state +0x10, a float the loader writes: DM_RENDER_SCALE, 0.5 to 1.0). The dynamic-resolution update (main+0x805aa0 on v131072) turns its current level into the
+# fraction its caller (main+0x31d3ee0) sizes the 3D views by: it finds the level in its list (head at +0x198, the list's end at +0x190; a node's index at -4, its
+# ResolutionReduceScale at -8), multiplies the scale by the base width (+0x7c), floors that to the alignment (+0x80) and divides by the width at +0x90. Level 0, 0.75, is the
+# game's top internal size, 1920x1080 of the 2560x1440 output docked. That happens at two sites, +0x480 and +0x890 into the update, each `ldur s1, [x9, #-8]`, and every level the
+# update returns goes through one of them (the others return 1.0, the update's own off state). The stub takes the smaller of the level's scale and level 0's scale × the render
+# scale: with Dynamic resolution off (the level stub holds level 0) a fixed share of the top size; with it on, the levels above that share are held to it and those below it
+# keep their own, so the climb works under the cap. A render scale of 0 (not set) or 1.0 leaves the original. x11, x16, x17, s0 and s2 are free at both sites: s0, s2 and the
+# flags are written again within 5 instructions, and x11 is not read again before the update returns
+rs_cap = (   # rs_stub.s, assembled with clang; x16 the state page (the ADRP before it)
+    0xbc5f8121, 0xbd401200, 0x1e202008, 0x5400020d,   # ldur s1, [x9, #-8] (original); ldr s0, [x16, #0x10]; fcmp s0, #0.0; b.le done
+    0x1e2e1002, 0x1e222000, 0x540001aa,               # fmov s2, #1.0; fcmp s0, s2; b.ge done
+    0xf940ce71, 0x91064270,                           # ldr x17, [x19, #0x198]; add x16, x19, #0x190
+    0xeb10023f, 0x54000120, 0xb85fc22b, 0x3400006b,   # loop: cmp x17, x16; b.eq done; ldur w11, [x17, #-4]; cbz w11, found
+    0xf9400631, 0x17fffffb,                           # ldr x17, [x17, #8]; b loop
+    0xbc5f8222, 0x1e200842, 0x1e222020, 0x1e21cc41)   # found: ldur s2, [x17, #-8]; fmul s2, s2, s0; fcmp s1, s2; fcsel s1, s2, s1, gt
+def render_scale(ctx):
+    here, emit, fs_site, fs_put, FS_STATE_OFF = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
+    update = ctx.others['dynamic resolution update']
+    for site in (update + 0x480, update + 0x890):
+        fs_site(site, '21815fbc')   # ldur s1, [x9, #-8]
+        start = here(); emit(ADRP(16, here(), FS_STATE_OFF))
+        for w in rs_cap: emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], 'dynamic resolution scale: at most level 0\'s × the host render scale (state +0x10; 0 or 1.0 = the game\'s)')
+    ctx.render_scale = 1
 
 MATCH_FRAME_STEP = {'main': [
     {'name': 'frame ratio from the host\'s step', 'size': 0x9b4, 'fingerprints': ['6ae2aff5344d14568e4dbaf93455e2d8278384bf892ed6c6eca87fef98fbcd1d'], 'stub': frame_step,   # v131072 main+0x6e6be0
