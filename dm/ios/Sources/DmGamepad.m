@@ -1,6 +1,7 @@
 // Virtual gamepad (Nintendo button positions) + physical controllers (GameController), handed to the host through dm_input_set and dm_pad_set_player (hle_hid.c, bit layout in dm_input.h).
 //   Two layouts, three in handheld mode, picked in the in-game menu (GameMenu.swift) that the menu button at the top centre (a gear) opens; the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_LAYOUT).
-//   The menu button stays while a physical controller is connected, so the menu is there in every layout and with every controller.
+//   While a physical controller is in use the menu button is hidden, so nothing sits over the picture: a tap anywhere on the screen shows it for a few seconds (menuReveal), and it
+//   stays while its menu is open. With touch controls it is always there.
 //   Tap (touch): no control but the menu button, every other touch goes to the game's local touch viewport; offered only while the game is in handheld mode, the only one in which it reads the touch screen (Balatro, played by touch).
 //   2D (simple): top corners ZL above L (one column), ZR above R likewise, teardrops with the tip toward the screen corner; − and + side by side at the top centre; the left stick in the bottom-left corner (fixed ring, tilt measured from the ring centre, small dead zone);
 //     the A (right) B (bottom) X (top) Y (left) diamond in the bottom-right corner, sliding a finger between keys switches keys. Each bottom corner holds a single control, so it sits close in (reaching halfway into the side safe-area inset).
@@ -29,6 +30,7 @@
 #include "pad_apple.h"
 #include "pad_slots.h"
 #include "ctrl_prompt.h"
+#include "button_icons.h"
 #include <stdatomic.h>
 #import "DmLayout.h"
 #import "DmGameMenu.h"
@@ -136,13 +138,22 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 @interface DmGamepad : UIView
 - (void)arrange:(DmLayout)layout;
 - (BOOL)menuTakes:(CGPoint)p;
+- (void)menuReveal;
 @end
 // The menu button: a UIButton whose menu is the in-game menu (UIKit draws it and takes the touches while it is open). Its hit circle is larger than the drawn one, and a key nearer
 // to the touch wins (− / + sit beside it), so it asks the pad
 @interface DmMenuButton : UIButton
+@property (nonatomic) BOOL open;   // its menu is up (the hidden-with-a-controller button waits for it to close before it fades)
 @end
 @implementation DmMenuButton
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e { DmGamepad *pad = (DmGamepad *)self.superview; return [pad menuTakes:[self convertPoint:p toView:pad]]; }
+- (void)contextMenuInteraction:(UIContextMenuInteraction *)i willDisplayMenuForConfiguration:(UIContextMenuConfiguration *)c animator:(id<UIContextMenuInteractionAnimating>)a {
+    [super contextMenuInteraction:i willDisplayMenuForConfiguration:c animator:a]; self.open = YES;
+}
+- (void)contextMenuInteraction:(UIContextMenuInteraction *)i willEndForConfiguration:(UIContextMenuConfiguration *)c animator:(id<UIContextMenuInteractionAnimating>)a {
+    [super contextMenuInteraction:i willEndForConfiguration:c animator:a]; self.open = NO;
+    [(DmGamepad *)self.superview menuReveal];   // a few seconds more after it closes
+}
 @end
 static __weak DmGamepad *g_view;
 static void pads_start(void);   // Physical controllers, below
@@ -162,6 +173,7 @@ static void pads_start(void);   // Physical controllers, below
     BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
     CALayer *_controls;                            // holds every control layer: hidden while a physical controller is connected (the view itself stays, for game touches)
     BOOL _padOff;                                  // a physical controller is connected: every touch goes to the game
+    unsigned _menuShown;                           // with a controller: the reveal that shows the menu button now (0 = hidden; each tap starts a new one)
     DmLayout _layout;
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
 }
@@ -431,6 +443,7 @@ int front_web_touch(void);
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     BOOL game = NO;
+    if (_padOff) [self menuReveal];   // with a controller the menu button is hidden until a tap
     for (UITouch *t in ts) {
         if (_padOff) { game |= [self gameBegin:t]; continue; }
         CGPoint p = [t locationInView:self];
@@ -477,6 +490,24 @@ int front_web_touch(void);
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
+// The menu button with a controller in use: hidden, shown by a tap for K_MENU_SHOW seconds (longer while its menu is open), then faded out. Without one it always shows
+static const double K_MENU_SHOW = 4;
+- (void)menuFollowPads {
+    _menuShown = 0; [_menu.layer removeAllAnimations];
+    _menu.alpha = 1; _menu.hidden = _padOff;
+}
+- (void)menuReveal {
+    if (!_padOff) return;
+    unsigned gen = ++_menuShown;
+    if (_menu.hidden) { _menu.alpha = 0; _menu.hidden = NO; [UIView animateWithDuration:0.15 animations:^{ self->_menu.alpha = 1; }]; }
+    __weak DmGamepad *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(K_MENU_SHOW * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [weakSelf menuFade:gen]; });
+}
+- (void)menuFade:(unsigned)gen {
+    if (gen != _menuShown || !_padOff) return;   // a later tap, or the controller went away
+    if (_menu.open) return;   // its menu is up: closing it reveals again (DmMenuButton)
+    [UIView animateWithDuration:0.4 animations:^{ self->_menu.alpha = 0; } completion:^(BOOL done) { if (done && gen == self->_menuShown && self->_padOff) self->_menu.hidden = YES; }];
+}
 - (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
 
 // ---- Shapes ----
@@ -594,7 +625,30 @@ static void read_pad(GCExtendedGamepad *g) {
 static void pad_keep_system_buttons(GCController *c) { for (NSString *b in @[GCInputButtonHome, GCInputButtonShare]) c.physicalInputProfile.buttons[b].preferredSystemGestureState = GCSystemGestureStateDisabled; }
 static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
 static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
+// The kind of controller the player uses, for the button icons the game's prompts show (front_pad_kind, front.h; button_icons.h, hle_sdk16.c icons_decide), as the Mac's (front_mac.m):
+// player 1's controller, else the first one connected, as padsChanged last saw them. GameController's Xbox and PlayStation profiles, else the product category; any other is another kind
+static _Atomic int g_pad_kind = PAD_KIND_NONE;
+static _Atomic uint64_t g_pad_watch_ns;   // when pads_start began watching (0: not yet)
+static int pad_kind_of(GCController *c) {
+    GCExtendedGamepad *g = c.extendedGamepad; NSString *k = c.productCategory ?: @"";
+    if ([g isKindOfClass:GCXboxGamepad.class] || [k containsString:@"Xbox"]) return PAD_KIND_XBOX;
+    if ([g isKindOfClass:GCDualSenseGamepad.class] || [g isKindOfClass:GCDualShockGamepad.class] || [k containsString:@"DualSense"] || [k containsString:@"DualShock"]) return PAD_KIND_PLAYSTATION;
+    return PAD_KIND_OTHER;
+}
+static void pad_kind_update(GCController *gone) {
+    int k = PAD_KIND_NONE; const char *name = NULL;
+    if (!g_merge && g_held[0] && g_held[0] != gone && g_held[0].extendedGamepad) { k = pad_kind_of(g_held[0]); name = pad_name(g_held[0]); }
+    else for (GCController *c in GCController.controllers) if (c != gone && c.extendedGamepad) { k = pad_kind_of(c); name = pad_name(c); break; }
+    if (atomic_exchange(&g_pad_kind, k) != k && k != PAD_KIND_NONE) LOG("front end: player 1's controller for the button icons: %s (%s)", name, k == PAD_KIND_XBOX ? "Xbox" : k == PAD_KIND_PLAYSTATION ? "PlayStation" : "another kind");
+}
+int front_pad_kind(void) {
+    int k = atomic_load(&g_pad_kind); uint64_t t0 = atomic_load(&g_pad_watch_ns);
+    if (k != PAD_KIND_NONE) return k;
+    // GameController tells of a controller connected at start shortly after the app starts watching: until 1.5 s after that, none may still be one coming
+    return !t0 || clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0 < 1500000000ull ? PAD_KIND_LOOKING : PAD_KIND_NONE;
+}
 static void pads_start(void) {
+    atomic_store(&g_pad_watch_ns, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
     e = getenv("DM_PAD_PRESS_TO_JOIN"); g_press_to_join = !g_merge && e && atoi(e);
     LOG("front end: %s", g_merge ? "every controller is player 1 (DM_PAD_MERGE)" : "each controller is a player of its own, the touch gamepad plays with player 1");
@@ -647,7 +701,8 @@ static BOOL pads_slotted(GCController *gone) {
     GCController *c = note.object, *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? c : nil;
     if (c && (!c.extendedGamepad || g_merge)) LOG("controller %s: %s%s", gone ? "disconnected" : "connected", pad_name(c), c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
     BOOL any = g_merge ? pads_merged(gone) : pads_slotted(gone);
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; });   // the touch gamepad hides while any controller is in use
+    pad_kind_update(gone);
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self menuFollowPads]; [self reset]; });   // the touch gamepad hides while any controller is in use
 }
 @end
 
