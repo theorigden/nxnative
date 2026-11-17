@@ -2396,7 +2396,29 @@ static int fps_high(void) {
     }
     return v;
 }
-static int fstep_hz(void) { return fps_high() ? 120 : 60; }   // the ticks the frame step counts in
+// 40 fps on a 120 Hz screen: stubs that read the step's tick rate (state +0x2c; the FRAME_STEP_120 capability, patch_nso.py; Tears of the Kingdom 1.4.3) are handed steps in
+// ticks of 1/120 s, so a hold of 3 is 40 fps, and late frames at a 60 target go to 40 before 30. Decided once, at the first call (a present: the screen's rate is known by then),
+// so a live change of the target among 30, 40 and 60 keeps the unit. A screen below 120 Hz, or not a multiple of it, keeps 1/60 s, where a 40 target runs at 30.
+// DM_FSTEP_120=0 keeps 1/60 s on a 120 Hz screen too, and =1 takes 1/120 s on any screen (tests)
+__attribute__((weak)) int dm_fps_step_120;   // loader.c: the stubs read the tick rate (the fixups table's FRAME_STEP_120)
+extern int g_dm_present_link;   // nvn_mtl.m: the display link's mode (1 = 60 Hz, 2 = 120 Hz)
+static int g_fs_ticks;
+static int fs_ticks(void) {
+    int t = __atomic_load_n(&g_fs_ticks, __ATOMIC_RELAXED);
+    if (t) return t;
+    const char *e = getenv("DM_FSTEP_120"); int hz = front_screen_max_fps();
+    int on = dm_fps_state && dm_fps_step_120 && (e && !strcmp(e, "1") || (!(e && !strcmp(e, "0")) && hz >= 120 && hz % 120 == 0));   // 1: whatever the screen (tests: headless, the pacer's clock)
+    t = on ? 120 : 60;
+    if (dm_fps_state) { float f = (float)t; __atomic_store((uint32_t *)(dm_fps_state + 0x2c), (uint32_t *)&f, __ATOMIC_RELAXED); }
+    if (on && !getenv("DM_PRESENT_LINK") && g_dm_present_link == 1) mtl_link_mode_set(2);   // the 120 Hz link: a frame held 3 ticks is 25 ms
+    if (dm_fps_state && dm_fps_step_120) LOG("[nvn] frame step in ticks of 1/%d s (%s)", t, on ? (e && !strcmp(e, "1") ? "DM_FSTEP_120=1" : "the screen runs at 120 Hz: 40 fps is a hold of 3") : e && !strcmp(e, "0") ? "DM_FSTEP_120=0" : "the screen is below 120 Hz: a 40 fps target runs at 30");
+    __atomic_store_n(&g_fs_ticks, t, __ATOMIC_RELAXED);
+    return t;
+}
+static int fstep_hz(void) { return fps_high() ? 120 : fs_ticks(); }   // the ticks the frame step counts in
+// Whether the screen still shows 120 Hz in tick mode: Low Power Mode holds a ProMotion screen at 60 (front_ios.m screen_refresh), where the link's ticks come every 1/60 s, so
+// a hold of an odd number of ticks cannot be shown: a 40 target runs at 30 then and the hold stays at the cap's (no window: the pacer's clock, any hold)
+static int fs_screen120(void) { const char *e = getenv("DM_FSTEP_120"); int hz = front_screen_max_fps(); return (e && !strcmp(e, "1")) || hz <= 0 || hz >= 120; }
 // Once per present: what the screen and the game's state allow now, and a display link at the rate the screen can show (DM_PRESENT_LINK keeps its own choice)
 static void high_cap_tick(void) {
     static int win = -1, link_env = -1;
@@ -2414,7 +2436,8 @@ static int fps_step_cap(void) {
     // calm interval, and cooling during those caps counts towards recovery.
     int thermal = thermal_capped(), movie = dm_movie_hz();
     if (movie) return movie >= 50 && !thermal ? 60 : 30;   // a movie: its player takes a picture per game frame, so the step follows its pictures whatever the target, the thermal cap aside (hle_movie.c dm_movie_hz)
-    return t <= 30 || thermal ? 30 : 60;
+    if (t <= 30 || thermal) return 30;
+    return t < 50 ? (fs_ticks() == 120 && fs_screen120() ? 40 : 30) : 60;   // 40: a hold of 3 ticks of 1/120 s (fs_ticks), else 30
 }
 static int fstep_on(void) { return fps_step_cap() != 0; }   // the host decides the steps in whole vsyncs
 // Engine-native frame limiters have no frame-step state page. Their requested
@@ -2486,7 +2509,7 @@ static int window_interval(const win_t *o) { present_cfg(o); return g_display_mo
 // DM_PRESENT_LINK=2) one tick of the present rate, as many link ticks as that takes. Before, a 120 Hz link waited two ticks per frame there, and display mode never went past 60 fps
 static int link_wait(const win_t *o, uint64_t timeout_ns) {
     static int hz_was, rate_was, remainder;   // acquire thread only, as with mtl_link_wait_ticks
-    if (fps_high()) { int t = present_itv(o) * mtl_link_rate() / 120; return mtl_link_wait_ticks(t < 1 ? 1 : t, timeout_ns); }   // the hold, in ticks of 1/120 s, on a link at 120 or 60 Hz
+    if (fstep_hz() == 120 && fps_present_cap()) { int r = mtl_link_rate(), hz = front_screen_max_fps(); if (hz > 0 && hz < r) r = hz; int t = present_itv(o) * r / 120; return mtl_link_wait_ticks(t < 1 ? 1 : t, timeout_ns); }   // the hold, in ticks of 1/120 s (120 fps, or 40 fps: fs_ticks), on a link at 120, 60 or 30 Hz
     int hz = g_display_mode && !fps_present_cap() && g_hz > 60 ? g_hz : 0, rate = mtl_link_rate();
     if (hz != hz_was || rate != rate_was) { remainder = 0; hz_was = hz; rate_was = rate; }
     if (hz) {
@@ -2550,7 +2573,7 @@ static int fstep_hold(void) {
 // Once per present, before this frame's period is taken: the time since the previous frame's start (shown) and the frame's cost decide this frame's hold and the next frame's step.
 // Cost = max(CPU: the time between the frames' starts without the pacing wait, GPU: the latest finished frame's GPU time), in vsyncs
 static void fstep_tick(const win_t *o, int c) {
-    static uint64_t prev, t0, v0, fixed_sum, held[FSTEP_MAX + 1]; static int nlog;
+    static uint64_t prev, t0, v0, fixed_sum, held[FSTEP_KMAX + 1]; static int nlog;
     const double v = 1e9 / fstep_hz();
     uint64_t st = g_fs_start ? g_fs_start : now_ns(), pw = g_fs_wait; g_fs_start = g_fs_wait = 0;
     // A drain of standing frames (g_fs_drain) comes out of the frame's time as far as it made the frame longer than its hold (nvn_fstep_drain_cut)
@@ -2563,7 +2586,8 @@ static void fstep_tick(const win_t *o, int c) {
     double shown = prev ? span / v : 0, gpu = 0; prev = st;
     for (uint64_t f = g_frame; f-- > 0 && g_frame - f <= 8;) { double g = mtl_gpu_ms(f); if (g >= 0) { gpu = g * 1e6 / v; break; } }
     double cpu = shown - pw / v, cost = cpu > gpu ? cpu : gpu;
-    int kmin = fstep_hz() / c, kmax = fps_high() ? 2 : !fstep_hold() ? kmin : kmin >= 2 ? 2 : FSTEP_MAX, k0 = g_fs.k,   // at 120 fps a late frame must step down whatever fps_hold says: the game steps by the target
+    const int tk = !fps_high() && fstep_hz() == 120;   // 40 fps steps: holds in ticks of 1/120 s (fs_ticks), any count on the 120 Hz link, up to the stub's step
+    int kmin = fstep_hz() / c, kmax = fps_high() ? 2 : !fstep_hold() ? kmin : tk ? (fs_screen120() ? FSTEP_KMAX : kmin) : kmin >= 2 ? 2 : FSTEP_MAX, k0 = g_fs.k,   // at 120 fps a late frame must step down whatever fps_hold says: the game steps by the target
          kmin0 = g_fs.kmin, probe0 = g_fs.probe;
     int fixed = dm_fps_state ? (int)__atomic_load_n((uint32_t *)(dm_fps_state + 0x24), __ATOMIC_RELAXED) : 0;
     uint64_t probes0 = g_fs.probes, failed0 = g_fs.failed;
@@ -2588,10 +2612,11 @@ static void fstep_tick(const win_t *o, int c) {
     // (Breath of the Wild on an M5 Pro: the probe's 33 frames took the clock 338 → 432 MHz and its GPU time 24.8 → 18.5 ms, then it failed at 22 ms frames; hold 1 needed about 560 MHz)
     g_fs.ramp = mtl_probe_ramp_on();
     g_fs.per_vsync = fstep_hz() / 60;
-    g_fs.smax = dm_fps_step_max;   // the stub's largest step (Mario Kart World: 2): frames held longer than the game steps would play in slow motion
+    g_fs.smax = tk ? 2 * (dm_fps_step_max ? dm_fps_step_max : FSTEP_MAX) : dm_fps_step_max;   // the stub's largest step (Mario Kart World: 2): frames held longer than the game steps would play in slow motion
     g_fs.no_payback = fps_high();   // at 120 fps the game steps by its target, not by the step: a late frame is slow motion, so three raise the hold whatever the average
     int n = nvn_fstep_next(&g_fs, shown, cost, kmin, kmax, fixed, cslow || gslow);
-    if (dm_fps_state) __atomic_store_n((uint32_t *)(dm_fps_state + 0x20), (uint32_t)n, __ATOMIC_RELAXED);
+    if (dm_fps_state) { float u = (float)fstep_hz(); __atomic_store((uint32_t *)(dm_fps_state + 0x2c), (uint32_t *)&u, __ATOMIC_RELAXED);   // the step's unit, with each step (fs_ticks)
+                        __atomic_store_n((uint32_t *)(dm_fps_state + 0x20), (uint32_t)n, __ATOMIC_RELAXED); }
     atomic_store(&g_fs_k, g_fs.k);
     held[g_fs.k]++; if (fixed) fixed_sum += (uint64_t)n;   // the stubs count only the host's steps
     static int fixed_was, nfix;
@@ -2605,8 +2630,8 @@ static void fstep_tick(const win_t *o, int c) {
         else if (gslow) w += snprintf(why + w, sizeof why - w, ", GPU %.2f× its time at hold %d", g_fg.cur / g_fg.ref, kmin);
         if (nvn_fstep_same(&g_fs)) snprintf(why + w, sizeof why - w, ", cost %.2f× the cost that held hold %d", g_fs.ccur / g_fs.cref, kmin);
         if (g_fs.k > k0 && g_fs.cref > 0) snprintf(held, sizeof held, "; hold %d held at %.2f", kmin, g_fs.cref);   // what a probe compares the longer hold's cost with
-        LOG("[nvn] frame step: hold %d → %d %s at present %llu (%s; cost %.2f, GPU %.2f%s)%s", k0, g_fs.k, fps_high() ? "ticks of 1/120 s" : "vsyncs", (unsigned long long)o->presents,
-            fixed ? "the game's own step" : kmin0 > FSTEP_MAX ? "the game's own step ended" : kmin != kmin0 ? "the cap changed" : g_fs.k > k0 ? "3 late frames" : g_fs.probes != probes0 ? why : "trial", cost, gpu, held, ++nlog == 40 ? "; further changes only counted below" : "");
+        LOG("[nvn] frame step: hold %d → %d %s at present %llu (%s; cost %.2f, GPU %.2f%s)%s", k0, g_fs.k, fstep_hz() == 120 ? "ticks of 1/120 s" : "vsyncs", (unsigned long long)o->presents,
+            fixed ? "the game's own step" : kmin0 > FSTEP_KMAX ? "the game's own step ended" : kmin != kmin0 ? "the cap changed" : g_fs.k > k0 ? "3 late frames" : g_fs.probes != probes0 ? why : "trial", cost, gpu, held, ++nlog == 40 ? "; further changes only counted below" : "");
     }
     if (probe0 == 1 && g_fs.probe != 1 && !fixed && nlog < 40) {   // whether the controller raised the clock for the shorter deadline, and the GPU time it measured there
         char gm[96] = "";
@@ -2619,10 +2644,12 @@ static void fstep_tick(const win_t *o, int c) {
         if (o->presents % 1800 == 0) { LOG("[nvn] 120 fps: held 1 / 2 ticks %llu / %llu frames, %llu late, %llu up / %llu down (%llu probes, %llu failed trials); standing-frame drains taken out of %llu frames (%.1f ticks)", (unsigned long long)held[1], (unsigned long long)held[2], (unsigned long long)g_fs.late, (unsigned long long)g_fs.ups, (unsigned long long)g_fs.downs, (unsigned long long)g_fs.probes, (unsigned long long)g_fs.failed, (unsigned long long)drain_n, drain_cut / v); memset(held, 0, sizeof held); drain_n = drain_cut = 0; }
     } else if (o->presents % 1800 == 0) {   // game time against real time (1.000 = normal speed; lower when a device cannot hold 20 fps or after long stalls)
         uint64_t vs = __atomic_load_n((uint64_t *)(dm_fps_state + 0x30), __ATOMIC_RELAXED) + fixed_sum, t = now_ns();
-        if (t0) LOG("[nvn] frame step: game time %.2f s in %.2f s (%.3f of real time); held 1 / 2 / 3 vsyncs %llu / %llu / %llu frames, %llu late, %llu vsyncs paid back, %.0f dropped, %llu up / %llu down (%llu probes, %llu failed trials); standing-frame drains taken out of %llu frames (%.1f vsyncs)",
-                    (vs - v0) / 60.0, (t - t0) / 1e9, (vs - v0) / 60.0 / ((t - t0) / 1e9), (unsigned long long)held[1], (unsigned long long)held[2], (unsigned long long)held[3],
-                    (unsigned long long)g_fs.late, (unsigned long long)g_fs.paid, g_fs.dropped, (unsigned long long)g_fs.ups, (unsigned long long)g_fs.downs, (unsigned long long)g_fs.probes, (unsigned long long)g_fs.failed,
-                    (unsigned long long)drain_n, drain_cut / v);
+        const double u = fstep_hz();   // the stubs count the steps they take in the frame step's ticks (state +0x2c)
+        char hs[96]; int w = 0; for (int k = tk ? 2 : 1; k <= (tk ? FSTEP_KMAX : FSTEP_MAX) && w < (int)sizeof hs - 24; k++) w += snprintf(hs + w, sizeof hs - w, "%s%llu", w ? " / " : "", (unsigned long long)held[k]);
+        if (t0) LOG("[nvn] frame step: game time %.2f s in %.2f s (%.3f of real time); held %s %s %s frames, %llu late, %llu %s paid back, %.0f dropped, %llu up / %llu down (%llu probes, %llu failed trials); standing-frame drains taken out of %llu frames (%.1f %s)",
+                    (vs - v0) / u, (t - t0) / 1e9, (vs - v0) / u / ((t - t0) / 1e9), tk ? "2 / 3 / 4 / 5 / 6" : "1 / 2 / 3", tk ? "ticks of 1/120 s" : "vsyncs", hs,
+                    (unsigned long long)g_fs.late, (unsigned long long)g_fs.paid, tk ? "ticks" : "vsyncs", g_fs.dropped, (unsigned long long)g_fs.ups, (unsigned long long)g_fs.downs, (unsigned long long)g_fs.probes, (unsigned long long)g_fs.failed,
+                    (unsigned long long)drain_n, drain_cut / v, tk ? "ticks" : "vsyncs");
         t0 = t; v0 = vs; memset(held, 0, sizeof held); drain_n = drain_cut = 0;
     }
 }

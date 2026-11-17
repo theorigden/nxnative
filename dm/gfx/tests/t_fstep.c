@@ -23,6 +23,16 @@ static void run(sim *m, int n, double w, int kmin, int kmax, int fixed) {
 static void hitch(sim *m) { run(m, 7, 1.6, 1, 3, 0); }
 
 int main(void) {
+    {   // 40 fps (hle_nvn.c fs_ticks): ticks of 1/120 s, kmin 3 at a 40 target and 2 at 60, holds up to 6 (the stub's 3 vsyncs). Steps are paid back in ticks
+        sim m = {0}; m.s.per_vsync = 2; m.s.smax = 6;
+        run(&m, 600, 2.6, 3, 6, 0); check(m.s.k == 3 && m.s.step == 3, "40 fps: frames of 21.7 ms hold 3 ticks (25 ms)");
+        check(m.game > 0.99 * m.real && m.game < 1.01 * m.real, "40 fps: game time = real time");
+        sim h = {0}; h.s.per_vsync = 2; h.s.smax = 6;
+        run(&h, 120, 1.5, 2, 6, 0); check(h.s.k == 2, "60 in ticks: frames of 12.5 ms hold 2 ticks (60 fps)");
+        run(&h, 120, 2.6, 2, 6, 0); check(h.s.k == 3, "60 in ticks: frames of 21.7 ms step to 3 ticks (40 fps), not 30");
+        check(h.game > 0.98 * h.real && h.game < 1.02 * h.real, "60 in ticks: game time = real time across the step");
+        run(&h, 120, 3.5, 2, 6, 0); check(h.s.k == 4, "60 in ticks: frames of 29 ms step to 4 ticks (30 fps)");
+    }
     {   // 120 fps (hle_nvn.c fps_high): kmin 1, kmax 2, in ticks of 1/120 s. The target follows the hold, so a hold above what frames take is the game at the right speed
         sim m = {0}; m.s.per_vsync = 2; m.s.no_payback = 1;
         run(&m, 120, 0.7, 1, 2, 0); check(m.s.k == 1, "120 fps: frames of 5.8 ms hold 120");

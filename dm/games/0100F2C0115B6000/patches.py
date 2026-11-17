@@ -12,25 +12,26 @@ def stub(ctx, step, read1, read2, fade, swap, view):
     """The frame step at the frame-step function (step), the two readers of the integer fps (read1, read2), the D-pad menu fade (fade), the swapchain argument (swap) and
     the view render size (view): each patched at its own offsets"""
     here, emit, fs_site, fs_put, FS_STATE_OFF = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
+    ctx.capabilities.add('FRAME_STEP_120')   # the step's tick rate is state +0x2c: steps of 1/120 s on a 120 Hz screen give 40 fps (hle_nvn.c fs_ticks)
     # frame step (replaces ldrb w9,[x0,#0x58], the first instruction after the prologue)
     fs_site(step + 0x18, '09604139')
     start = here(); emit(ADRP(16, here(), FS_STATE_OFF))
     for w in (0xbd400200,   # ldr s0,[x16]           target fps
               0x1e202008,   # fcmp s0,#0.0
               0x54000640,   # b.eq off (+50)        target 0: original path
-              0xb9402202,   # ldr w2,[x16,#0x20]     step in vsyncs
+              0xb9402202,   # ldr w2,[x16,#0x20]     step in ticks
               0x340001a2,   # cbz w2,elapsed (+13)   not decided yet: by the measured frame time
               0x1e230041,   # ucvtf s1,w2
-              0x1e27d003,   # fmov s3,#30.0
-              0x1e211872,   # fdiv s18,s3,s1
-              0x1e322a52,   # fadd s18,s18,s18       fps = 60 / step
+              0xbd402e03,   # ldr s3,[x16,#0x2c]     ticks a second (60.0, or 120.0 for steps of 1/120 s: 40 fps)
+              0x1e211872,   # fdiv s18,s3,s1         fps = ticks a second / step
+              0x1e390065,   # fcvtzu w5,s3
               0xbd002412,   # str s18,[x0,#0x24]     float fps
-              0x52800785,   # mov w5,#60
+              0xd503201f,   # nop                    (the branches above count instructions)
               0x1ac208a5,   # udiv w5,w5,w2
-              0xb9005005,   # str w5,[x0,#0x50]      integer fps
+              0xb9005005,   # str w5,[x0,#0x50]      integer fps (the game's readers of it take the float: below)
               0xf9401a04,   # ldr x4,[x16,#0x30]
               0x8b224084,   # add x4,x4,w2,uxtw
-              0xf9001a04):  # str x4,[x16,#0x30]     vsyncs stepped
+              0xf9001a04):  # str x4,[x16,#0x30]     ticks stepped
         emit(w)
     emit(B(here(), step + 0x110))                                       # the original epilogue
     for w in (0xf9406c22,   # elapsed: ldr x2,[x1,#0xd8]  last frame time in 19.2 MHz ticks

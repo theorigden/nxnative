@@ -52,6 +52,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Found on:** [Mario Kart World](../../dm/games/0400C3F00006E000/README.md#frame-rate) (2 vsyncs; the 0.977 window on the 16 GB M6, and frames at hold 3 in every window of issue #1823's M4 Max runs).
 - **Check:** `t_fstep` (frames of 2.6 vsyncs with a cap of 2: hold 2, no step above 2; a step the game fixes at 3 held at 2); `test_patches` (Mario Kart World's stub declares 2).
 
+### No 40 fps between 60 and 30 on a 120 Hz screen
+
+- **Symptom:** on an iPad Pro or iPhone Pro whose GPU takes 17–24 ms a frame (Tears of the Kingdom on an M1 iPad Pro, `[longframe] … GPU 20.5 ms`), the frame step drops from 60 to 30 and stays there, with time to spare at 33 ms.
+- **Cause:** the frame step counted in vsyncs of 1/60 s, the unit the stubs hand the game, so a hold could only be 16.7 or 33.3 ms. A 120 Hz screen can show a frame for three of its refreshes, 25 ms, but no whole number of 1/60 s steps is 25 ms.
+- **Fix:** the step's unit is a state-page field the stubs read (+0x2c, ticks a second, 60 written by the loader). Stubs that read it declare `FRAME_STEP_120` (`ctx.capabilities`, in `fixups.tsv`), and on a screen that shows 120 Hz the host then counts the frame step in ticks of 1/120 s (`hle_nvn.c fs_ticks`, decided at the first present). A 40 fps target (`DM_FPS_TARGET=40`, offered only to such games) is a hold of 3 ticks on the 120 Hz link, held for its 25 ms by the link callback, and at 60 fps late frames step to 40 before 30. `nvn_fstep.h` holds up to `FSTEP_KMAX` (6 ticks, the stub's 3 vsyncs). A screen that drops to 60 Hz while the game runs (Low Power Mode) runs a 40 target at 30 and keeps the cap's hold. `DM_FSTEP_120=0` keeps 1/60 s; `=1` takes 1/120 s on any screen (tests).
+- **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md#frame-rate) (Theo's M1 iPad Pro, 2026-11-17).
+- **Check:** `t_fstep` (40 fps in ticks: frames of 2.6 ticks hold 3 at game time = real time; at 60, frames of 2.6 step to 3 and of 3.5 to 4).
+
 ### A regress run stops when another app takes the key window
 
 - **Symptom:** `scripts/regress.py` reports a hang (`no frame after … s`, a state dump with every game thread waiting) in some runs of Tears of the Kingdom, baseline and candidate alike; the log's last focus line before it is `oe focus state → 2`, with no `→ 1` after it.

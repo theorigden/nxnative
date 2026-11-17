@@ -18330,7 +18330,7 @@ static struct timespec link_deadline(uint64_t ns);
     int submitted;
     ext_wait(it.ev_val); snap_commit_wait(it.snap_v); sub_commit_wait(it.sub_v);
     @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); mtl_tex_unpin(it.t.serial); }
-    g_link_hold_until = submitted && it.period > 0.025 ? update.targetPresentationTimestamp + it.period : 0;
+    g_link_hold_until = submitted && it.period > 0.02 ? update.targetPresentationTimestamp + it.period : 0;   // 40 fps (25 ms, three ticks of the 120 Hz link: hle_nvn.c fs_ticks) is held too
     if (!submitted) {
         pthread_mutex_lock(&g_pq_mu);
         if (ticket > g_pq_done) g_pq_done = ticket;

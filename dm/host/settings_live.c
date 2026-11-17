@@ -13,6 +13,7 @@ __attribute__((weak)) void mtl_grade_set(const dm_grade *g);
 __attribute__((weak)) void dm_haptics_apple_levels(float gain, float min);   // haptics_apple.m
 __attribute__((weak)) float dm_render_scale_limit(void);                    // loader.c
 __attribute__((weak)) int mtl_present_upscale_set(int on);                  // nvn_mtl.m
+extern __attribute__((weak)) int dm_fps_step_120;   // loader.c: the stubs step in 1/120 s on a 120 Hz screen (40 fps)
 extern __attribute__((weak)) uint8_t *dm_fps_state;                         // loader.c: the frame step state page, NULL for a game without one
 
 static int num(const char *v, float lo, float hi, float *out) {   // a number from lo to hi, as the launcher's ranges (no hex, no NaN)
@@ -55,7 +56,7 @@ int settings_live_apply(const char *env, const char *value) {
     } else if (!strcmp(env, "DM_FPS_TARGET")) {   // the frame step's cap, read at every present (hle_nvn.c fps_step_cap); a game without the state page reads its cap once
         if (!dm_fps_state) return 0;
         if (!value) return 1;
-        if (strcmp(value, "30") && strcmp(value, "60")) return 0;   // 0 (the game's own interval) and 120 only at start
+        if (strcmp(value, "30") && strcmp(value, "60") && (strcmp(value, "40") || !dm_fps_step_120)) return 0;   // 0 (the game's own interval) and 120 only at start; 40 where the stubs step in 1/120 s
         float f = (float)atoi(value); __atomic_store((uint32_t *)dm_fps_state, (uint32_t *)&f, __ATOMIC_RELAXED);
         ok = 1;
     } else if (!strcmp(env, "DM_RENDER_SCALE")) {   // the render-scale stub multiplies each view's size by state +0x10 whenever the game sizes its views (patches.py)
