@@ -84,6 +84,42 @@ class DeriveProfile(Base):
         self.assertNotIn('mem_used', [k for k, _ in game.Game(self.pdir).rows])
         self.assertFalse((self.pdir / 'shader_map.tsv').exists())
 
+    def test_cross_title_marker_uses_actual_regional_resources(self):
+        import romfs_image
+        for image in (False, True):
+            for present in (True, False):
+                with self.subTest(image=image, original_marker_present=present):
+                    rom = self.ex / 'RomFS'
+                    shutil.rmtree(rom, ignore_errors=True); rom.mkdir()
+                    (self.ex / 'RomFS.img').unlink(missing_ok=True)
+                    (rom / 'CPK').mkdir()
+                    (rom / 'CPK/ALL_ASIA.CPK').write_bytes(b'fixture' * 10)
+                    if present: (rom / 'CPK/ALL_USEU.CPK').write_bytes(b'fixture')
+                    text = (self.src / 'game.tsv').read_text().replace('romfs_marker\ta/b', 'romfs_marker\tCPK/ALL_USEU.CPK')
+                    (self.src / 'game.tsv').write_text(text)
+                    if image:
+                        romfs_image.pack(str(rom), str(self.ex / 'RomFS.img'))
+                        shutil.rmtree(rom)
+                    self.derive(app=TID + 0x1000)
+                    marker = 'CPK/ALL_USEU.CPK' if present else 'CPK/ALL_ASIA.CPK'
+                    self.assertEqual(game.Game(self.pdir).get('romfs_marker'), marker)
+                    self.assertTrue((nsp.rfs.source(self.ex) / marker).is_file())
+                    self.later_stages(); self.derive(app=TID + 0x1000); self.assert_kept()
+                    self.assertEqual(game.Game(self.src).get('romfs_marker'), 'CPK/ALL_USEU.CPK')
+
+    def test_same_title_keeps_missing_marker_for_validation(self):
+        self.derive(app=TID)
+        self.assertEqual(game.Game(self.pdir).get('romfs_marker'), 'a/b')
+
+    def test_cross_title_empty_romfs_keeps_missing_marker_for_validation(self):
+        (self.ex / 'RomFS/a.bin').unlink()
+        self.derive(app=TID + 0x1000)
+        self.assertEqual(game.Game(self.pdir).get('romfs_marker'), 'a/b')
+
+    def test_shader_only_profile_keeps_missing_marker(self):
+        nsp.derive_profile(game.Game(self.src), self.pdir, 'v65536', self.ex, ['main'], app=TID + 0x1000, shader_only=True)
+        self.assertEqual(game.Game(self.pdir).get('romfs_marker'), 'a/b')
+
     def test_unchanged_inputs_keep_later_stages(self):
         self.assertEqual(self.derive(), '1.1.0')
         self.later_stages()
@@ -1032,6 +1068,46 @@ class ShaderProfileKey(Base):   # the shader step's key takes the profile's shad
             with self.subTest(what):
                 before = self.key(); change(); self.assertNotEqual(self.key(), before)
 
+
+
+class BuildSources(unittest.TestCase):   # profile_guess.py build_sources reads the head of every file of the RomFS: 19 s of every build of Ocarina of Time, kept beside the image
+    def setUp(self):
+        self.t = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.t)
+        self.game = self.t / 'v0'; (self.game / 'ExeFS').mkdir(parents=True)
+        (self.game / 'ExeFS/main').write_bytes(b'code'); (self.game / 'RomFS.img').write_bytes(b'image')
+        self.reader = self.t / 'reader.py'; self.reader.write_text('# the readers\n')
+        self.calls, self.src = [], {'graphics': ('nvn', 'main imports nvnBootstrapLoader'), 'glslc_capture': (False, ''), 'ue_decode': (0, 'no shader code archive'), 'modules': (['main'], '')}
+        def read(exefs, romfs, mods): self.calls.append((exefs, romfs, list(mods))); return dict(self.src)
+        for patch in (mock.patch.object(nsp, 'pg', mock.Mock(build_sources=read)), mock.patch.object(nsp, 'python_tool_files', lambda *a: [self.reader])):
+            patch.start(); self.addCleanup(patch.stop)
+
+    def sources(self, mods=('main',)): return nsp.build_sources(REPO, self.game, list(mods))
+
+    def test_kept_while_the_image_the_modules_and_the_readers_are_the_same(self):
+        self.assertEqual(self.sources(), self.src)
+        self.assertEqual(self.calls, [(self.game / 'ExeFS', nsp.rfs.source(self.game), ['main'])])
+        got = self.sources(); self.assertEqual(len(self.calls), 1)   # from RomFS.img.sources
+        self.assertEqual(got, self.src); self.assertEqual(got['graphics'][0], 'nvn'); self.assertIs(got['glslc_capture'][0], False)
+        changes = (lambda: (self.game / 'RomFS.img').write_bytes(b'another image'), lambda: (self.game / 'ExeFS/main').write_bytes(b'c0de'),
+                   lambda: (self.game / 'ExeFS/subsdk0').write_bytes(b'more'), lambda: self.reader.write_text('# other readers\n'),
+                   lambda: (self.game / 'RomFS.img.sources').write_text('not what it wrote'))
+        for n, change in enumerate(changes, 2):
+            with self.subTest(change=n):
+                change(); self.assertEqual(self.sources(), self.src); self.assertEqual(len(self.calls), n)
+                self.sources(); self.assertEqual(len(self.calls), n)
+        self.sources(('main', 'sdk')); self.assertEqual(len(self.calls), 7)   # the modules the profile loads
+        st = (self.game / 'RomFS.img').stat(); os.utime(self.game / 'RomFS.img', ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))   # the image written again, the same size
+        self.sources(('main', 'sdk')); self.assertEqual(len(self.calls), 8)
+
+    def test_a_romfs_folder_is_read_each_time(self):
+        (self.game / 'RomFS.img').unlink(); (self.game / 'RomFS').mkdir()
+        self.sources(); self.sources(); self.assertEqual(len(self.calls), 2)
+        self.assertEqual(sorted(p.name for p in self.game.iterdir()), ['ExeFS', 'RomFS'])
+
+    def test_what_json_does_not_give_back_is_not_kept(self):
+        self.src['nro_imports'] = (frozenset({'glslcCompile'}), '')
+        self.assertEqual(self.sources(), self.src); self.assertEqual(self.sources(), self.src); self.assertEqual(len(self.calls), 2)
+        self.assertFalse((self.game / 'RomFS.img.sources').exists())
 
 
 if __name__ == '__main__': unittest.main()
