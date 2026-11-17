@@ -98,6 +98,64 @@ def render_scale(ctx):
         fs_put(site, [B(site, start)], 'dynamic resolution scale: at most level 0\'s × the host render scale (state +0x10; 0 or 1.0 = the game\'s)')
     ctx.render_scale = 1
 
+# Screen shape and output size (profile keys screen_aspect and output_size; the loader's state page +0x48 output height, +0x50 layout height (float), +0x68 output width,
+# loader.c dm_fps_state_apply: DM_SCREEN_ASPECT, DM_OUTPUT_RES). The game's sizes are Tears of the Kingdom's at 4/3: docked it renders a 2560x1440 output (its top internal
+# 3D size 1920x1080, Dynamic resolution's level 0) with a 1280x720 layout space. The loader's sizes are 1920 wide unless DM_OUTPUT_RES gives a width (+0x68), so an
+# output width of 0 here means the game's own 2560 and the loader's height x 4/3 (1920x1200 at 16:10 → 2560x1600). The sites, as in Tears of the Kingdom's screen_shape
+# (0100F2C0115B6000/patches.py), on v131072:
+# - nnMain passes the framework its display size, x8 = 2560 | 1440 << 32 (main+0x1202ee0 / +0x1202ee4, stored at [x21, #0x14]), which it takes for the frame buffer and the window
+#   textures; and the layout (virtual) size 1280.0 x 720.0 (main+0x1203084 / +0x12030a0, to main+0x346be50), whose height becomes the loader's layout height.
+# - The display object's crop request (main+0xe9a860, the same function as Tears of the Kingdom's main+0x3de5b0: +0xac x, y, +0xb4 w, h), which nvnWindowSetCrop takes for the
+#   presented picture: a 2560x1440 crop becomes the output's size.
+# - The final image: main+0x652260 sizes each agl::RenderDisplay (+0x770 / +0x774 floats) as the display-mode object's slot i (+0x10 + i*0xc, int w, h) x its scale (s0 / s1),
+#   the same loop as Tears of the Kingdom's main+0x8d760 (+0x7a8): a 2560x1440 slot becomes the output's size. x16 / x17 are free there (x11 is written after the site).
+# x16 and x17 are free at every site (nnMain: x16 is not read between the sites and the calls after them; the crop setter is a leaf)
+def _out_size(emit):
+    """w16 = the output width, w17 its height, from the state page in x16 and w17 = its +0x48 (not 0): +0x68 when set, else the game's 2560 and the height x 4/3"""
+    for w in (0xb9406a10,   # ldr w16, [x16, #0x68]   output width (0 = the game's)
+              0x350000b0,   # cbnz w16, have (+5)
+              0x531e7631,   # lsl w17, w17, #2
+              0x52800070,   # mov w16, #3
+              0x1ad00a31,   # udiv w17, w17, w16      height x 4/3
+              0x52814010):  # mov w16, #2560
+        emit(w)
+def screen_shape(ctx):
+    here, emit, fs_site, fs_put, STATE = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
+    def stub(site, orig, words, why):   # words: ints, None for the state page's adrp into x16, 'size' for _out_size
+        fs_site(site, orig)
+        start = here()
+        for w in words:
+            if w is None: emit(ADRP(16, here(), STATE))
+            elif w == 'size': _out_size(emit)
+            else: emit(w)
+        emit(B(here(), site + 4))
+        fs_put(site, [B(site, start)], why)
+    stub(0x1202ee4, '08b4c0f2', (0xf2c0b408,   # movk x8, #0x5a0, lsl #32 (original): 2560 | 1440 << 32
+                                 None, 0xb9404a11, 0x34000111,   # ldr w17, [x16, #0x48]; cbz w17, done (+8)   no screen shape or output size
+                                 'size', 0xaa118208),   # have: orr x8, x16, x17, lsl #32
+         'display size 2560x1440 (frame buffer, window textures) → the host\'s output size')
+    stub(0x12030a0, '8886e8f2', (0xf2e88688,   # movk x8, #0x4434, lsl #48 (original): 1280.0 | 720.0 << 32
+                                 None, 0xb9405210, 0x34000050, 0xb3607e08),   # ldr w16, [x16, #0x50]; cbz w16, done; bfi x8, x16, #32, #32
+         'layout size 1280x720 → the host\'s layout height')
+    stub(0xe9a868, '03901629', (None, 0xb9404a11, 0x340001b1,   # ldr w17, [x16, #0x48]; cbz w17, orig (+13)
+                                0x7128007f, 0x54000161, 0x7116809f, 0x54000121,   # cmp w3, #2560; b.ne orig; cmp w4, #1440; b.ne orig
+                                'size', 0x2a1003e3, 0x2a1103e4,   # have: mov w3, w16; mov w4, w17
+                                0x29169003),   # orig: stp w3, w4, [x0, #0xb4]
+         'window crop 2560x1440 → the host\'s output size')
+    stub(0x65238c, '420d422d', (0x2d420d42,   # ldp s2, s3, [x10, #0x10] (original): the slot's int width and height
+                                0xf9400951, 0xd2814010, 0xf2c0b410, 0xeb10023f, 0x54000181,   # ldr x17, [x10, #0x10]; mov x16, #2560 | 1440 << 32; cmp; b.ne done (+12)
+                                None, 0xb9404a11, 0x34000131,   # ldr w17, [x16, #0x48]; cbz w17, done (+9)
+                                'size', 0x1e270202, 0x1e270223),   # have: fmov s2, w16; fmov s3, w17 (ints: the scvtf after the site converts them)
+         'final image (agl::RenderDisplay) 2560x1440 → the host\'s output size')
+
+# Build v131072 (e0f3ccfa…): the frame step at its matched functions, then the screen-shape stubs, whose sites are this build's fixed addresses
+def frame_step_131072(ctx):
+    ctx.base, ctx.others = 0x6e6be0, {'dynamic resolution': 0x8065e0, 'dynamic resolution update': 0x805aa0}
+    frame_step(ctx)
+    screen_shape(ctx)
+
+FRAME_STEP = {'e0f3ccfaf50065ae4ea01eb5aeb13b1a': frame_step_131072}
+
 MATCH_FRAME_STEP = {'main': [
     {'name': 'frame ratio from the host\'s step', 'size': 0x9b4, 'fingerprints': ['6ae2aff5344d14568e4dbaf93455e2d8278384bf892ed6c6eca87fef98fbcd1d'], 'stub': frame_step,   # v131072 main+0x6e6be0
      'others': {'dynamic resolution': {'size': 0x294, 'fingerprints': ['7af6ceb0aedf8e0c17dc08ce17fcd6a7cba6d394a0d09e3b504c6d668dc418e7']},   # v131072 main+0x8065e0
@@ -157,6 +215,12 @@ BINDING = [
     {'what': 'frame ratio from the host\'s step', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate',
      'why': "the game's own frame-ratio division, found by its function's fingerprint on any build that keeps the function",
      'checked': 'v131072 main: one function with this fingerprint, the site and its free registers read by disassembly (2026-11-08)'},
+    {'what': 'render scale: the dynamic resolution\'s scale at most level 0\'s × DM_RENDER_SCALE', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
+     'why': "the game's own dynamic-resolution update, found by its function's fingerprint with the level function; the two sites read the update's level list",
+     'checked': 'v131072 main: the update\'s two scale sites, its level list and its caller (main+0x31d3ee0, which sizes the 3D views from the returned scale) read by disassembly (2026-11-17); not yet run in the game'},
+    {'what': 'screen shape and output size: display size, layout height, crop and final image', 'now': 'build', 'goal': 'game', 'purpose': 'rendering',
+     'why': "fixed addresses of v131072, found by their constants (2560x1440, 1280.0 x 720.0) and by Tears of the Kingdom's crop setter and final-image loop, which are the same code here; no function-matched form yet",
+     'checked': 'v131072 main: the four sites and their free registers read by disassembly against Tears of the Kingdom 1.4.3\'s (2026-11-17); not yet run in the game'},
     {'what': 'dynamic resolution: full size, or a climb on the load measured at each level', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
      'why': "the game's own dynamic-resolution level function and update, found by their functions' fingerprints on any build that keeps both; switchable (DM_DYNAMIC_RESOLUTION)",
      'checked': 'v131072 main: one function with each fingerprint (the level function a leaf, x2..x11 / x16 / x17 / s0..s2 free), its callers, the update and the controller fields read by disassembly, the fields read in play (2026-11-08); the climb run natively against a model of the update and in play to full size (2026-11-09)'},
