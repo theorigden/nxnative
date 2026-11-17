@@ -86,7 +86,7 @@ static font_t font_open(const char *path, const char *file) {   // path (an over
 }
 // Button icons of the player's controller (button_icons.h): the variant of the fonts the host serves, decided once, at the first font a game asks for. auto waits for the front end to finish
 // looking for controllers (front_pad_kind PAD_KIND_LOOKING, at most 3 s after it starts) so a controller connected at start counts
-__attribute__((weak)) int front_pad_kind(void) { return PAD_KIND_NONE; }   // front.h; front_mac.m has it, the iOS front end not yet (auto: the Switch's icons)
+__attribute__((weak)) int front_pad_kind(void) { return PAD_KIND_NONE; }   // front.h; front_mac.m and the iOS front end (DmGamepad.m) have it; a host without a front end answers none (the Switch's icons)
 static const char *g_icons_variant;
 static void icons_decide(void) {
     const char *set = getenv("DM_BUTTON_ICONS"), *face = getenv("DM_PAD_FACE");
