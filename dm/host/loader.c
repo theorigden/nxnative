@@ -426,7 +426,7 @@ void dm_fps_state_apply(void) {
             memcpy(dm_fps_state + 0x74, &wide, 4); memcpy(dm_fps_state + 0x78, &wtol, 4); memcpy(dm_fps_state + 0x7c, &far, 4);
             // The HUD at the taller edges (patches.py duo_anchor.c, +0x80..+0x9c): the shift (half the layout height over 360), the vertical stretch of full-screen panes, the edge
             // rule's distance, the listed corner widgets' distance, a full-screen pane's width and height in the 1280x720 space, the tallest one still stretched (a menu's
-            // background is about 720 tall, the weapon wheel's gradient 1280; the map's tiles are left alone anyway), and the horizontal stretch of full-screen panes (a wider
+            // background is about 720 tall, the weapon wheel's gradient 1280; the map's tiles and icons, on a canvas larger than the screen, are left alone: duo_anchor.c big), and the horizontal stretch of full-screen panes (a wider
             // screen: its layout width over 1280; the HUD itself stays in the 16:9 middle, which is the safe area on an iPhone in landscape)
             // (Mac, a Master Mode save: an edge distance of 280 takes the menus' title bars (286 to 320), the map's frame pieces (284 to 360) and the bottom guides (-318) along
             // as whole rows; 330 left the title bars and the rupee count in the middle while the hearts moved. Text moves with its widget since the rule runs where global

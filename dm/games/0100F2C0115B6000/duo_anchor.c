@@ -27,6 +27,13 @@ static inline int container(const char *p, const void *fn_null_draw, const float
     return !draws(p, fn_null_draw) && (w < 64 * u || h < 64 * u);
 }
 
+// a canvas: a pane wider than the screen and taller than it by more than a quarter (the screen: 1280 x st[7] by 720 x st[1] in 720 units). No HUD or menu
+// container is: their full-screen panes are at most 2250x1080 in 1080 units, and the tallest other one, the album's detail, 1453
+static inline int big(const char *p, const float *st, float u) {
+    float w = fab(f(p, 0x50) * f(p, 0x70)), h = fab(f(p, 0x54) * f(p, 0x84));
+    return w > 1280 * u * st[7] + 2 && h > 1.25f * 720 * u * st[1];
+}
+
 void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
     if (st[0] == 0 && !(st[7] > 1)) return;
     const char *pp = parent(pane);
@@ -36,6 +43,13 @@ void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
     for (int i = 0; i < 48 && parent(root); i++) root = parent(root);
     float u = f(root, 0x54) >= 1000 ? 1.5f : 1.0f;
     float *g = (float *)(pane + 0x70);
+    // Content on a canvas larger than the screen (the map's 36002x30002 parts pane and its 2250x2250 cuts, in the map, the adventure log and the loading screen):
+    // its tiles and icons are placed by the map's scroll and zoom, not at the screen's edges. A tile or an icon past the edge distance moved out on its own, so the
+    // map came apart in bands as it scrolled, and one scaled to a full-screen size was stretched. On such a canvas only an unscaled full-screen background is
+    // stretched; nothing moves
+    int canvas = 0;
+    for (const char *p = pp; p && !canvas; p = parent(p)) canvas = big(p, st, u);
+    if (canvas && !(fab(fab(g[0]) - 1) < 0.01f && fab(fab(g[5]) - 1) < 0.01f)) return;
     float gw = fab(f(pane, 0x50) * g[0]), gh = fab(f(pane, 0x54) * g[5]);
     int leaf = *(char *const *)(pane + 0x28) == pane + 0x20;   // the child list empty: a stretch would carry over to children (a menu page's whole content)
     if (gw >= st[4] * u && gh >= st[5] * u && gh <= st[6] * u && fab(g[3]) < 40 * u && fab(g[7]) < 40 * u) {
@@ -45,7 +59,7 @@ void duo_calc(char *pane, const float *st, const void *fn_null_draw) {
         }
         return;
     }
-    if (st[0] == 0) return;   // wider, not taller: nothing moves
+    if (st[0] == 0 || canvas) return;   // wider, not taller, or on a canvas: nothing moves
     // a background as tall as the layout but not as wide, centred up and down: stretched the same way
     if (leaf && gh >= st[5] * u && gh < 720 * u * st[1] - 2 && fab(g[7]) < 40 * u && draws(pane, fn_null_draw)) {
         g[4] *= st[1]; g[5] *= st[1]; g[6] *= st[1]; g[7] *= st[1];
