@@ -220,6 +220,23 @@ def screen_shape(ctx):
                                0x1e270221,    # fmov s1,w17
                                0xbd40a200),   # ldr s0,[x16,#0xa0]    its width
          'HUD projection 1920x1080 → the host\'s, in the output\'s shape')
+    # A picture whose texture is projected from the screen fitted to the layout's size (the layout library's projection texture coordinates, main+0x10d3bf8: bit 0 of
+    # the parameters takes the size from the layout, [DrawInfo +0xc0] +0x28, main+0x10d3c7c; x22 = the pane, size +0x50, global matrix +0x70, sy +0x84) maps the
+    # layout file's 1920x1080 onto the texture, scaled by the screen's projection (the HUD projection stub's 1920x1344 on a 1.43 screen): the menus' and the save
+    # list's blurred background (a 480x270 copy of the whole screen) on a full-screen pane stretched to the taller screen read rows -0.27..1.27 of it (texture
+    # matrix row -1/868 per unit instead of -1/1344), and the rows above and below were its edge rows drawn on (Mac and iPad Pro M1 at 1.43: vertical streaks over
+    # the top and bottom fifth). A pane as tall as the taller screen on it (its height x its global y scale, within 2 units) takes the screen's layout height, the
+    # layout width / the screen's ratio (state +0x58); on a wider screen a pane as wide as it takes the layout height x the ratio as its width. Other panes, and
+    # 16:9 (ratio 0), keep the file's size. s16-s18 and x16 are written before they are read after the site
+    stub(0x10d3c7c, '0101452d', (0x2d450101, None,   # ldp s1,s0,[x8,#0x28] (original: the layout's width, height); adrp x16, state
+                                 0xbd405a10, 0x1e202208, 0x54000340,   # ldr s16,[x16,#0x58] (ratio); fcmp s16,#0; b.eq out
+                                 0x1e301831, 0x1e202220, 0x5400016d,   # s17 = width / ratio (the screen's height in the layout's units); not taller than the file: wider
+                                 0xbd4056d2, 0xbd4086d0, 0x1e20c210, 0x1e300a52, 0x1e201010, 0x1e302a52, 0x1e312240, 0x540001eb,   # |h x sy| + 2 < s17: out
+                                 0x1e204220, 0x1400000d,               # s0 = s17; b out
+                                 0x1e300811, 0x1e212220, 0x5400014d,   # wider: s17 = height x ratio; not wider than the file: out
+                                 0xbd4052d2, 0xbd4072d0, 0x1e20c210, 0x1e300a52, 0x1e201010, 0x1e302a52, 0x1e312240, 0x5400004b,   # |w x sx| + 2 < s17: out
+                                 0x1e204221),                          # s1 = s17; out: back
+         'projected texture fitted to the layout: a pane as tall (wide) as the taller (wider) screen maps its whole height (width)')
     # The layout objects' own 1280x720: each takes the layout height while its bit of state +0x54 is set (loader.c DM_SCREEN_ASPECT_SITES, all by default), so one build
     # can try them one by one (Breath of the Wild's taller_bit). The int pair in x24 and the float pair in x25 at main+0x2880b3c / main+0x2880b40 (the UI system's setup:
     # 1280x720 and 1280.0, 720.0), and the 1280x720 defaults of four objects (main+0x2880e34 +0x288, main+0xd47068 +0x310, main+0x6ee938 +0x1fc, main+0x8c3fe8: eight slots).

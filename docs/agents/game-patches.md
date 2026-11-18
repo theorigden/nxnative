@@ -82,7 +82,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 43 | 0 | 0 | `build` → `game` ×2 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 2 | 3 | 0 | `game` ×5 |
-| [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 38 | 0 | 0 | `game`, `build` → `game` |
+| [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 39 | 0 | 0 | `game`, `build` → `game` |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Xenoblade Chronicles X: Definitive Edition](#xenoblade-chronicles-x-definitive-edition) | 6 | 0 | 1 | 1 | 0 | `game` ×2 |
 
@@ -598,8 +598,8 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 - **`game`**, frame rate, at goal, checked: 1.4.3 main: one function of each fingerprint; the rule rewrites it byte-identical to its former build entry (2026-11-09): 60 fps frame step and render scale. The game's own timing object, found by its six functions' fingerprints on any build that keeps them; no engine sibling shares the code (BotW, SMO, MK8D, ACNH, Splatoon 2 / 3, Kirby, Mario Party, Ocarina, Smash, Metroid Dread, Origami King: no exact match, 2026-11-09)
 - **`build` → `game`**, rendering, blocked: no function-matched form yet: build 1.4.3 only (FRAME_STEP), judgement: screen shape and output size. The display size, layout size, crop, final image and HUD projection in nnMain, agl and the display objects, sead::PerspectiveProjection and nn::ui2d::Pane::Calculate / CalculateGlobalMatrix
 
-- **1.4.3 `main`** `277178b7…` ([patches.py:338](../../dm/games/0100F2C0115B6000/patches.py#L338))
-  <details><summary>29 frame-step sites</summary>
+- **1.4.3 `main`** `277178b7…` ([patches.py:355](../../dm/games/0100F2C0115B6000/patches.py#L355))
+  <details><summary>30 frame-step sites</summary>
 
   - frame step `+0x8d860`: final image (agl::RenderDisplay) 1920x1080 → the host's output size
   - frame step `+0xd5cc0`: view render size x the host render scale (1.0 = original)
@@ -624,6 +624,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0xc02694`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
   - frame step `+0xd4275c`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
   - frame step `+0xd47068`: 1280x720 default of an object (+0x310)
+  - frame step `+0x10d3c7c`: projected texture fitted to the layout: a pane as tall (wide) as the taller (wider) screen maps its whole height (width)
   - frame step `+0x10d816c`: nn::ui2d::Pane::CalculateGlobalMatrix (whole layouts, before Calculate): duo_calc after each pane's matrix
   - frame step `+0x27d53f8`: sead::PerspectiveProjection fovy widened for a view of the screen's ratio (more above and below, 16:9 sides), stored widened
   - frame step `+0x27d5444`: PerspectiveProjection matrix: the HUD camera (16:9, near 1, far 10000) takes the screen's ratio and a widened vertical angle
